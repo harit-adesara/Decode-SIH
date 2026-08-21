@@ -12,5 +12,6 @@ graph.add_node("end_call", end_call_node)
 graph.add_edge(START,"agent")
 graph.add_edge("agent","sms")   
 graph.add_edge("sms","end_call")
+graph.add_edge("end_call",END)
 
 workflow=graph.compile()
