@@ -6,6 +6,9 @@ from google.genai import types
 import requests
 from twilio.rest import Client
 from rag import retrieve_and_rerank
+from dotenv import load_dotenv
+
+load_dotenv()
 
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY")

@@ -1,7 +1,9 @@
 import os
 from twilio.rest import Client
 from langchain_google_genai import ChatGoogleGenerativeAI
+from dotenv import load_dotenv
 
+load_dotenv()
 
 twilio_client = Client(
     os.environ["TWILIO_ACCOUNT_SID"],

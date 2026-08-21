@@ -1,10 +1,9 @@
 import os
-import cohere
-from qdrant_client import QdrantClient
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_classic.retrievers.document_compressors.cohere_rerank import CohereRerank
 from qdrant import vectorstore
+from dotenv import load_dotenv
 
+load_dotenv()
 
 reranker = CohereRerank(cohere_api_key=os.getenv("COHERE_API_KEY"), top_n=5, model="rerank-v3.5")
 

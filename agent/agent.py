@@ -3,7 +3,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from tools import ask_user, google_search,calculate_distance,send_sms,end_call,find_healthcare_facility,emergency_response,government_scheme_rag,final_response
 from langchain.agents import create_agent
 from state import Data
+from dotenv import load_dotenv
 
+load_dotenv()
 
 llm=ChatGoogleGenerativeAI(
     google_api_key=os.environ["GEMINI_API_KEY"],

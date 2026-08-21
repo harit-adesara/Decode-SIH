@@ -16,3 +16,4 @@ langchain-qdrant
 qdrant-client
 langchain-community
 pydantic
+python-dotenv

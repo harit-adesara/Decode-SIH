@@ -2,6 +2,7 @@ from langgraph.graph import StateGraph,START,END
 from state import Data
 from agent import healthcare_agent
 from nodes import send_sms_node,end_call_node
+from checkpoint import checkpointer
 
 graph=StateGraph(Data)
 
@@ -14,4 +15,4 @@ graph.add_edge("agent","sms")
 graph.add_edge("sms","end_call")
 graph.add_edge("end_call",END)
 
-workflow=graph.compile()
+workflow=graph.compile(checkpointer=checkpointer)
