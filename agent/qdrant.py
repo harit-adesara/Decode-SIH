@@ -1,33 +1,34 @@
-from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
-from .config import embeddings
-from qdrant_client.models import VectorParams, Distance
 import os
+
 from dotenv import load_dotenv
+from qdrant_client import QdrantClient
+from langchain_qdrant import QdrantVectorStore
+
+from .config import embeddings
 
 load_dotenv()
 
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+
+if not QDRANT_URL:
+    raise ValueError("QDRANT_URL is missing from .env")
+
+if not QDRANT_API_KEY:
+    raise ValueError("QDRANT_API_KEY is missing from .env")
+
 
 client = QdrantClient(
-    url=os.getenv("QDRANT_URL"),
-    api_key=os.getenv("QDRANT_API_KEY"),
+    url=QDRANT_URL,
+    api_key=QDRANT_API_KEY,
     timeout=120,
-    prefer_grpc=True
+    prefer_grpc=True,
 )
-
-
-if not client.collection_exists("github_rag"):
-    client.create_collection(
-        collection_name="github_rag",
-        vectors_config=VectorParams(
-            size=768,
-            distance=Distance.COSINE
-        )
-    )
 
 
 vectorstore = QdrantVectorStore(
     client=client,
-    collection_name="github_rag",
-    embedding=embeddings
+    collection_name="health_schemes",
+    embedding=embeddings,
+    content_payload_key="text",
 )

@@ -5,7 +5,7 @@ from google import genai
 from google.genai import types
 import requests
 from twilio.rest import Client
-# from .rag import retrieve_and_rerank
+from .rag import retrieve_and_rerank
 from dotenv import load_dotenv
 from tavily import TavilyClient
 
@@ -113,67 +113,6 @@ Content:
     except Exception as e:
         return f"Search failed: {str(e)}"
 
-# @tool
-# def calculate_distance(
-#     origin: str,
-#     destination: str
-# ) -> str:
-#     """
-#     Calculate the driving distance and estimated travel time
-#     between a user's location and a healthcare facility.
-
-#     origin:
-#         User's city, locality, address, or place.
-
-#     destination:
-#         Hospital, PHC, CHC, clinic, or other healthcare facility.
-#     """
-
-#     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
-
-#     headers = {
-#         "Content-Type": "application/json",
-#         "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-#         "X-Goog-FieldMask": "routes.distanceMeters,routes.duration",
-#     }
-
-#     body = {
-#         "origin": {
-#             "address": origin
-#         },
-#         "destination": {
-#             "address": destination
-#         },
-#         "travelMode": "DRIVE",
-#         "routingPreference": "TRAFFIC_AWARE",
-#     }
-
-#     response = requests.post(
-#         url,
-#         headers=headers,
-#         json=body,
-#         timeout=10,
-#     )
-
-#     response.raise_for_status()
-
-#     data = response.json()
-
-#     if not data.get("routes"):
-#         return "Could not calculate the distance."
-
-#     route = data["routes"][0]
-
-#     distance_meters = route["distanceMeters"]
-#     duration = route["duration"]
-
-#     distance_km = distance_meters / 1000
-
-#     return (
-#         f"Distance: {distance_km:.2f} km\n"
-#         f"Estimated travel time: {duration}"
-#     )
-
 @tool
 def calculate_distance(
     origin: str,
@@ -279,254 +218,91 @@ def end_call(call_sid: str) -> str:
     except Exception as e:
         return f"Failed to end call: {str(e)}"
 
-# @tool
-# def find_healthcare_facility(
-#     location: str,
-#     facility_type: str
-# ) -> str:
-#     """
-#     Find healthcare facilities near a user's location.
-
-#     Use this tool when the user wants to find a:
-#     - PHC
-#     - CHC
-#     - Government hospital
-#     - Private hospital
-#     - Clinic
-#     - Diagnostic center
-
-#     Args:
-#         location:
-#             User's city, locality, village, address, or place.
-
-#         facility_type:
-#             Type of healthcare facility required.
-
-#     Returns:
-#         A list of relevant healthcare facilities with their
-#         names, addresses, and available contact information
-#         when found.
-
-#     This tool only finds facilities. Use calculate_distance()
-#     separately when distance or travel time is required.
-#     """
-
-#     search_query = (
-#         f"Find {facility_type} healthcare facilities near "
-#         f"{location}, India. "
-#         f"Provide facility name, address, and phone number "
-#         f"if available. Prefer official or reliable sources."
-#     )
-
-#     response = client.models.generate_content(
-#         model="gemini-3.1-flash-lite",
-#         contents=search_query,
-#         config=types.GenerateContentConfig(
-#             tools=[
-#                 types.Tool(
-#                     google_search=types.GoogleSearch()
-#                 )
-#             ]
-#         )
-#     )
-
-#     if not response.text:
-#         return "No healthcare facilities were found."
-
-#     return response.text
-
 @tool
 def find_healthcare_facility(
     location: str,
     facility_type: str
 ) -> str:
     """
-    Find healthcare facilities near a user's location
-    using Google Places API (New).
+    Search the web (via Tavily) for healthcare facilities near a location.
+    Useful as a fallback when structured location APIs don't have enough data.
     """
 
-    url = "https://places.googleapis.com/v1/places:searchText"
-
-    headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": (
-            "places.displayName,"
-            "places.formattedAddress,"
-            "places.nationalPhoneNumber,"
-            "places.location"
-        )
-    }
-
-    body = {
-        "textQuery": f"{facility_type} near {location}, India",
-        "pageSize": 5
-    }
+    query = f"best {facility_type} near {location} India contact number address"
 
     try:
-        response = requests.post(
-            url,
-            headers=headers,
-            json=body,
-            timeout=10
+        response = tavily_client.search(
+            query=query,
+            search_depth="basic",
+            max_results=5,
+            include_answer=True,
         )
-
-        response.raise_for_status()
-
-        places = response.json().get("places", [])
-
-        if not places:
-            return "No healthcare facilities found."
 
         results = []
 
-        for place in places:
-            name = place.get("displayName", {}).get(
-                "text", "Unknown"
-            )
+        if response.get("answer"):
+            results.append(f"Summary: {response['answer']}")
 
-            address = place.get(
-                "formattedAddress",
-                "Address unavailable"
-            )
-
-            phone = place.get(
-                "nationalPhoneNumber",
-                "Phone unavailable"
-            )
-
-            location_data = place.get(
-                "location",
-                {}
-            )
-
-            lat = location_data.get("latitude")
-            lng = location_data.get("longitude")
+        for item in response.get("results", []):
+            title = item.get("title", "Unknown")
+            url = item.get("url", "")
+            content = item.get("content", "")[:300]
 
             results.append(
-                f"Name: {name}\n"
-                f"Address: {address}\n"
-                f"Phone: {phone}\n"
-                f"Latitude: {lat}\n"
-                f"Longitude: {lng}"
+                f"Name/Title: {title}\n"
+                f"Snippet: {content}\n"
+                f"Source: {url}"
             )
+
+        if not results:
+            return "No results found."
 
         return "\n\n".join(results)
 
     except Exception as e:
-        return f"Failed to find healthcare facilities: {str(e)}"
+        return f"Failed to search healthcare facilities: {str(e)}"
 
-# @tool
-# def emergency_response(
-#     location: str,
-#     emergency_type: str,
-#     caller_phone: str,
-#     summary: str
-# ) -> str:
-#     """
-#     Trigger the emergency-response workflow for a potentially
-#     life-threatening situation.
+@tool
+def government_scheme_rag(query:str)->str:
+    """
+    Retrieve information about Indian government healthcare
+    schemes from the BharatSwasthya knowledge base.
 
-#     Use this tool when the caller reports a situation such as:
-#     - Severe chest pain
-#     - Severe difficulty breathing
-#     - Unconsciousness
-#     - Severe bleeding
-#     - Stroke-like symptoms
-#     - Seizures
-#     - Other potentially life-threatening situations
+    Use this tool when the user asks about:
+    - Government healthcare schemes
+    - Scheme eligibility
+    - Benefits provided by a scheme
+    - Required documents
+    - Application or enrollment process
+    - Coverage and financial assistance
+    - Beneficiary requirements
+    - Scheme-specific rules and guidelines
 
-#     The tool does not diagnose the caller. It records the
-#     emergency details and triggers the configured emergency
-#     workflow.
+    This tool searches the stored government-scheme documents
+    using semantic similarity search and returns the most
+    relevant information.
 
-#     Args:
-#         location: Current location of the caller.
-#         emergency_type: Brief description of the suspected emergency.
-#         caller_phone: Caller phone number.
-#         summary: Short summary of the caller's situation.
+    Do NOT use this tool for:
+    - Diagnosing diseases
+    - Symptoms or medical conditions
+    - Finding hospitals or PHCs
+    - Hospital distance or travel time
+    - Emergency services
+    - Current facility availability
+    - General web searches
 
-#     Returns:
-#         Emergency workflow status.
-#     """
+    Args:
+        query: The user's question about a government
+               healthcare scheme.
 
-#     try:
+    Returns:
+        Relevant government healthcare scheme information
+        from the knowledge base.
+    """
 
-#         emergency_data = {
-#             "location": location,
-#             "emergency_type": emergency_type,
-#             "caller_phone": caller_phone,
-#             "summary": summary,
-#             "status": "EMERGENCY_TRIGGERED"
-#         }
+    context = retrieve_and_rerank(query)
 
-#         # -----------------------------------------
-#         # 3. TODO:
-#         # Trigger your authorized ambulance/
-#         # emergency-service integration here.
-#         #
-#         # Example:
-#         #
-#         # emergency_api.create_request(
-#         #     location=location,
-#         #     phone=caller_phone,
-#         #     description=summary
-#         # )
-#         # -----------------------------------------
-
-#         return (
-#             "Emergency response has been triggered. "
-#             "The caller should seek emergency medical assistance immediately."
-#         )
-
-#     except Exception as e:
-
-#         return (
-#             "Emergency workflow could not be triggered. "
-#             "The caller should seek emergency medical assistance immediately."
-#         )
-
-# @tool
-# def government_scheme_rag(query:str)->str:
-#     """
-#     Retrieve information about Indian government healthcare
-#     schemes from the BharatSwasthya knowledge base.
-
-#     Use this tool when the user asks about:
-#     - Government healthcare schemes
-#     - Scheme eligibility
-#     - Benefits provided by a scheme
-#     - Required documents
-#     - Application or enrollment process
-#     - Coverage and financial assistance
-#     - Beneficiary requirements
-#     - Scheme-specific rules and guidelines
-
-#     This tool searches the stored government-scheme documents
-#     using semantic similarity search and returns the most
-#     relevant information.
-
-#     Do NOT use this tool for:
-#     - Diagnosing diseases
-#     - Symptoms or medical conditions
-#     - Finding hospitals or PHCs
-#     - Hospital distance or travel time
-#     - Emergency services
-#     - Current facility availability
-#     - General web searches
-
-#     Args:
-#         query: The user's question about a government
-#                healthcare scheme.
-
-#     Returns:
-#         Relevant government healthcare scheme information
-#         from the knowledge base.
-#     """
-
-#     context = retrieve_and_rerank(query)
-
-#     return context
+    return context
 
 @tool
 def final_response(message: str) -> str:

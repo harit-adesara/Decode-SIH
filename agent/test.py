@@ -1,10 +1,9 @@
-from .tools import calculate_distance
+from .tools import government_scheme_rag
 
 
-result = calculate_distance.invoke(
+result = government_scheme_rag.invoke(
     {
-        "origin": "raipur ahmedabad ?",
-        "destination":"lg hosptial maninagar, ahemdabad"
+        "query":"explain esanjeevani yojna"
     }
 )
 
