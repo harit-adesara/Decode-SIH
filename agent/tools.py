@@ -5,8 +5,13 @@ from google import genai
 from google.genai import types
 import requests
 from twilio.rest import Client
-from .rag import retrieve_and_rerank
+# from .rag import retrieve_and_rerank
 from dotenv import load_dotenv
+from tavily import TavilyClient
+
+tavily_client = TavilyClient(
+    api_key=os.getenv("TAVILY_API_KEY")
+)
 
 load_dotenv()
 
@@ -53,34 +58,121 @@ def ask_user(question: str) -> str:
 @tool
 def google_search(query: str) -> str:
     """
-    Search the web for general or current information.
+    Search the internet for general-purpose information.
 
-    Use this for:
-    - Current information
-    - Latest announcements
-    - General factual questions
-    - Current government information
-    - Current healthcare information
-    - Information that is not available in the RAG knowledge base
-
-    Do not use this specifically for calculating distance.
-    Do not use this for questions that should be answered from
-    the government-scheme RAG.
+    Use this tool when:
+    - Current information is required
+    - The user explicitly asks to search the web
+    - Recent news or announcements are needed
+    - Information is not available in the knowledge base
+    - Information about people, companies, products, places,
+      technologies, or other general topics is required
     """
 
-    response = client.models.generate_content(
-        model= "gemini-3.1-flash-lite",
-        contents=query,
-        config=types.GenerateContentConfig(
-            tools=[
-                types.Tool(
-                    google_search=types.GoogleSearch()
-                )
-            ]
+    try:
+        response = tavily_client.search(
+            query=query,
+            search_depth="basic",
+            topic="general",
+            max_results=3,
+            include_answer=True
         )
-    )
 
-    return response.text
+        output = []
+        answer = response.get("answer")
+
+        if answer:
+            output.append(f"Summary:\n{answer}")
+
+        results = response.get("results", [])
+
+        if not results:
+            return "No relevant search results found."
+
+        output.append("\nSearch Results:")
+
+        for i, result in enumerate(results, 1):
+
+            title = result.get("title", "")
+            url = result.get("url", "")
+            content = result.get("content", "")
+
+            output.append(
+                f"""
+{i}. {title}
+
+URL: {url}
+
+Content:
+{content}
+"""
+            )
+
+        return "\n".join(output)
+
+    except Exception as e:
+        return f"Search failed: {str(e)}"
+
+# @tool
+# def calculate_distance(
+#     origin: str,
+#     destination: str
+# ) -> str:
+#     """
+#     Calculate the driving distance and estimated travel time
+#     between a user's location and a healthcare facility.
+
+#     origin:
+#         User's city, locality, address, or place.
+
+#     destination:
+#         Hospital, PHC, CHC, clinic, or other healthcare facility.
+#     """
+
+#     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+
+#     headers = {
+#         "Content-Type": "application/json",
+#         "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+#         "X-Goog-FieldMask": "routes.distanceMeters,routes.duration",
+#     }
+
+#     body = {
+#         "origin": {
+#             "address": origin
+#         },
+#         "destination": {
+#             "address": destination
+#         },
+#         "travelMode": "DRIVE",
+#         "routingPreference": "TRAFFIC_AWARE",
+#     }
+
+#     response = requests.post(
+#         url,
+#         headers=headers,
+#         json=body,
+#         timeout=10,
+#     )
+
+#     response.raise_for_status()
+
+#     data = response.json()
+
+#     if not data.get("routes"):
+#         return "Could not calculate the distance."
+
+#     route = data["routes"][0]
+
+#     distance_meters = route["distanceMeters"]
+#     duration = route["duration"]
+
+#     distance_km = distance_meters / 1000
+
+#     return (
+#         f"Distance: {distance_km:.2f} km\n"
+#         f"Estimated travel time: {duration}"
+#     )
 
 @tool
 def calculate_distance(
@@ -88,14 +180,10 @@ def calculate_distance(
     destination: str
 ) -> str:
     """
-    Calculate the driving distance and estimated travel time
-    between a user's location and a healthcare facility.
+    Calculate driving distance and estimated travel time
+    between the user's location and a healthcare facility.
 
-    origin:
-        User's city, locality, address, or place.
-
-    destination:
-        Hospital, PHC, CHC, clinic, or other healthcare facility.
+    Returns distance in kilometers and travel time in minutes.
     """
 
     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
@@ -117,31 +205,47 @@ def calculate_distance(
         "routingPreference": "TRAFFIC_AWARE",
     }
 
-    response = requests.post(
-        url,
-        headers=headers,
-        json=body,
-        timeout=10,
-    )
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=body,
+            timeout=10,
+        )
 
-    response.raise_for_status()
+        response.raise_for_status()
 
-    data = response.json()
+        data = response.json()
 
-    if not data.get("routes"):
-        return "Could not calculate the distance."
+        if not data.get("routes"):
+            return "Could not calculate the distance."
 
-    route = data["routes"][0]
+        route = data["routes"][0]
 
-    distance_meters = route["distanceMeters"]
-    duration = route["duration"]
+        distance_meters = route["distanceMeters"]
+        distance_km = distance_meters / 1000
 
-    distance_km = distance_meters / 1000
+        duration_seconds = float(
+            route["duration"].rstrip("s")
+        )
 
-    return (
-        f"Distance: {distance_km:.2f} km\n"
-        f"Estimated travel time: {duration}"
-    )
+        duration_minutes = round(
+            duration_seconds / 60
+        )
+
+        return (
+            f"Distance: {distance_km:.2f} km.\n"
+            f"Estimated travel time: {duration_minutes} minutes."
+        )
+
+    except requests.exceptions.Timeout:
+        return "Route calculation timed out."
+
+    except requests.exceptions.RequestException:
+        return "Unable to calculate the route."
+
+    except (KeyError, ValueError, TypeError):
+        return "Unable to process route information."
 
 @tool
 def end_call(call_sid: str) -> str:
@@ -312,117 +416,117 @@ def find_healthcare_facility(
     except Exception as e:
         return f"Failed to find healthcare facilities: {str(e)}"
 
-@tool
-def emergency_response(
-    location: str,
-    emergency_type: str,
-    caller_phone: str,
-    summary: str
-) -> str:
-    """
-    Trigger the emergency-response workflow for a potentially
-    life-threatening situation.
+# @tool
+# def emergency_response(
+#     location: str,
+#     emergency_type: str,
+#     caller_phone: str,
+#     summary: str
+# ) -> str:
+#     """
+#     Trigger the emergency-response workflow for a potentially
+#     life-threatening situation.
 
-    Use this tool when the caller reports a situation such as:
-    - Severe chest pain
-    - Severe difficulty breathing
-    - Unconsciousness
-    - Severe bleeding
-    - Stroke-like symptoms
-    - Seizures
-    - Other potentially life-threatening situations
+#     Use this tool when the caller reports a situation such as:
+#     - Severe chest pain
+#     - Severe difficulty breathing
+#     - Unconsciousness
+#     - Severe bleeding
+#     - Stroke-like symptoms
+#     - Seizures
+#     - Other potentially life-threatening situations
 
-    The tool does not diagnose the caller. It records the
-    emergency details and triggers the configured emergency
-    workflow.
+#     The tool does not diagnose the caller. It records the
+#     emergency details and triggers the configured emergency
+#     workflow.
 
-    Args:
-        location: Current location of the caller.
-        emergency_type: Brief description of the suspected emergency.
-        caller_phone: Caller phone number.
-        summary: Short summary of the caller's situation.
+#     Args:
+#         location: Current location of the caller.
+#         emergency_type: Brief description of the suspected emergency.
+#         caller_phone: Caller phone number.
+#         summary: Short summary of the caller's situation.
 
-    Returns:
-        Emergency workflow status.
-    """
+#     Returns:
+#         Emergency workflow status.
+#     """
 
-    try:
+#     try:
 
-        emergency_data = {
-            "location": location,
-            "emergency_type": emergency_type,
-            "caller_phone": caller_phone,
-            "summary": summary,
-            "status": "EMERGENCY_TRIGGERED"
-        }
+#         emergency_data = {
+#             "location": location,
+#             "emergency_type": emergency_type,
+#             "caller_phone": caller_phone,
+#             "summary": summary,
+#             "status": "EMERGENCY_TRIGGERED"
+#         }
 
-        # -----------------------------------------
-        # 3. TODO:
-        # Trigger your authorized ambulance/
-        # emergency-service integration here.
-        #
-        # Example:
-        #
-        # emergency_api.create_request(
-        #     location=location,
-        #     phone=caller_phone,
-        #     description=summary
-        # )
-        # -----------------------------------------
+#         # -----------------------------------------
+#         # 3. TODO:
+#         # Trigger your authorized ambulance/
+#         # emergency-service integration here.
+#         #
+#         # Example:
+#         #
+#         # emergency_api.create_request(
+#         #     location=location,
+#         #     phone=caller_phone,
+#         #     description=summary
+#         # )
+#         # -----------------------------------------
 
-        return (
-            "Emergency response has been triggered. "
-            "The caller should seek emergency medical assistance immediately."
-        )
+#         return (
+#             "Emergency response has been triggered. "
+#             "The caller should seek emergency medical assistance immediately."
+#         )
 
-    except Exception as e:
+#     except Exception as e:
 
-        return (
-            "Emergency workflow could not be triggered. "
-            "The caller should seek emergency medical assistance immediately."
-        )
+#         return (
+#             "Emergency workflow could not be triggered. "
+#             "The caller should seek emergency medical assistance immediately."
+#         )
 
-@tool
-def government_scheme_rag(query:str)->str:
-    """
-    Retrieve information about Indian government healthcare
-    schemes from the BharatSwasthya knowledge base.
+# @tool
+# def government_scheme_rag(query:str)->str:
+#     """
+#     Retrieve information about Indian government healthcare
+#     schemes from the BharatSwasthya knowledge base.
 
-    Use this tool when the user asks about:
-    - Government healthcare schemes
-    - Scheme eligibility
-    - Benefits provided by a scheme
-    - Required documents
-    - Application or enrollment process
-    - Coverage and financial assistance
-    - Beneficiary requirements
-    - Scheme-specific rules and guidelines
+#     Use this tool when the user asks about:
+#     - Government healthcare schemes
+#     - Scheme eligibility
+#     - Benefits provided by a scheme
+#     - Required documents
+#     - Application or enrollment process
+#     - Coverage and financial assistance
+#     - Beneficiary requirements
+#     - Scheme-specific rules and guidelines
 
-    This tool searches the stored government-scheme documents
-    using semantic similarity search and returns the most
-    relevant information.
+#     This tool searches the stored government-scheme documents
+#     using semantic similarity search and returns the most
+#     relevant information.
 
-    Do NOT use this tool for:
-    - Diagnosing diseases
-    - Symptoms or medical conditions
-    - Finding hospitals or PHCs
-    - Hospital distance or travel time
-    - Emergency services
-    - Current facility availability
-    - General web searches
+#     Do NOT use this tool for:
+#     - Diagnosing diseases
+#     - Symptoms or medical conditions
+#     - Finding hospitals or PHCs
+#     - Hospital distance or travel time
+#     - Emergency services
+#     - Current facility availability
+#     - General web searches
 
-    Args:
-        query: The user's question about a government
-               healthcare scheme.
+#     Args:
+#         query: The user's question about a government
+#                healthcare scheme.
 
-    Returns:
-        Relevant government healthcare scheme information
-        from the knowledge base.
-    """
+#     Returns:
+#         Relevant government healthcare scheme information
+#         from the knowledge base.
+#     """
 
-    context = retrieve_and_rerank(query)
+#     context = retrieve_and_rerank(query)
 
-    return context
+#     return context
 
 @tool
 def final_response(message: str) -> str:

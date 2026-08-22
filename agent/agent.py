@@ -1,6 +1,6 @@
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
-from .tools import ask_user, google_search,calculate_distance,end_call,find_healthcare_facility,emergency_response,government_scheme_rag,final_response
+from .tools import ask_user, google_search,calculate_distance,end_call,find_healthcare_facility,government_scheme_rag,final_response
 from langchain.agents import create_agent
 from .state import Data
 from dotenv import load_dotenv
@@ -12,7 +12,7 @@ llm=ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite"
 )
 
-tools=[ask_user, google_search,calculate_distance,end_call,find_healthcare_facility,emergency_response,government_scheme_rag,final_response]
+tools=[ask_user, google_search,calculate_distance,end_call,find_healthcare_facility,government_scheme_rag,final_response]
 
 SYSTEM_PROMPT = """
 You are BharatSwasthya AI, a multilingual voice-first healthcare assistant for India.
