@@ -1,171 +1,127 @@
-import base64
-import audioop
+# import os
+# import io
 
-from google import genai
-from google.genai import types
+# from sarvamai import SarvamAI
+# from dotenv import load_dotenv
 
-client = genai.Client(
-    api_key="YOUR_GOOGLE_API_KEY"
+# load_dotenv()
+
+# sarvam_client = SarvamAI(
+#     api_subscription_key=os.environ["SARVAM_API_KEY"]
+# )
+
+
+# def stt(audio_bytes: bytes, language_code: str = "unknown") -> str:
+#     """
+#     Transcribe in-memory audio bytes (e.g. a downloaded Twilio
+#     recording) to text using Sarvam's Speech-to-Text REST API.
+#     Nothing is written to disk.
+
+#     language_code:
+#         BCP-47 code such as "hi-IN", "gu-IN", "en-IN".
+#         Use "unknown" to let Sarvam auto-detect the spoken language
+#         (used for the very first turn, before we know the caller's
+#         chosen language).
+#     """
+
+#     audio_buffer = io.BytesIO(audio_bytes)
+#     audio_buffer.name = "recording.wav"
+
+#     response = sarvam_client.speech_to_text.transcribe(
+#         file=audio_buffer,
+#         model="saaras:v3",
+#         language_code=language_code,
+#     )
+
+#     transcript = (response.transcript or "").strip()
+
+#     return transcript
+
+
+# def tts_stream(text: str, language_code: str, speaker: str = "shubh"):
+#     """
+#     Convert text to speech using Sarvam's streaming Text-to-Speech
+#     REST endpoint and yield raw WAV audio chunks as they're
+#     generated - no full clip is buffered in memory and nothing is
+#     written to disk.
+
+#     Output is fixed to 8kHz WAV to match Twilio's telephony audio
+#     format, so no resampling is needed downstream.
+#     """
+
+#     audio_stream = sarvam_client.text_to_speech.convert_stream(
+#         text=text,
+#         language_code=language_code,
+#         model="bulbul:v3",
+#         speaker=speaker,
+#         speech_sample_rate=8000,
+#         output_audio_codec="wav",
+#     )
+
+#     for chunk in audio_stream:
+#         if chunk:
+#             yield chunk
+
+import os
+import io
+
+from sarvamai import SarvamAI
+from dotenv import load_dotenv
+
+load_dotenv()
+
+sarvam_client = SarvamAI(
+    api_subscription_key=os.environ["SARVAM_API_KEY"]
 )
 
-MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
-
-# ------------------------------------------------------------
-# AUDIO CONVERSION
-# ------------------------------------------------------------
-
-def twilio_to_gemini(audio_bytes: bytes) -> bytes:
-
-    pcm_8k = audioop.ulaw2lin(
-        audio_bytes,
-        2
-    )
-
-    pcm_16k, _ = audioop.ratecv(
-        pcm_8k,
-        2,
-        1,
-        8000,
-        16000,
-        None
-    )
-
-    return pcm_16k
-
-
-def gemini_to_twilio(audio_bytes: bytes) -> bytes:
-
-    pcm_8k, _ = audioop.ratecv(
-        audio_bytes,
-        2,
-        1,
-        24000,
-        8000,
-        None
-    )
-
-    return audioop.lin2ulaw(
-        pcm_8k,
-        2
-    )
-
-async def stt(
-    session,
-    twilio_audio: bytes
-):
+def stt(audio_bytes: bytes, language_code: str = "unknown") -> str:
     """
-    Twilio audio bytes
-        ↓
-    Gemini Live
-        ↓
-    text
+    Transcribe in-memory audio bytes (e.g. a downloaded Twilio
+    recording) to text using Sarvam's Speech-to-Text REST API.
+    Nothing is written to disk.
 
-    No .wav file.
+    language_code:
+        BCP-47 code such as "hi-IN", "gu-IN", "en-IN".
+        Use "unknown" to let Sarvam auto-detect the spoken language
+        (used for the very first turn, before we know the caller's
+        chosen language).
     """
 
-    pcm_audio = twilio_to_gemini(
-        twilio_audio                                                                                                        
+    audio_buffer = io.BytesIO(audio_bytes)
+    audio_buffer.name = "recording.wav"
+
+    response = sarvam_client.speech_to_text.transcribe(
+        file=audio_buffer,
+        model="saaras:v3",
+        language_code=language_code,
     )
 
-    await session.send_realtime_input(
-        audio=types.Blob(
-            data=pcm_audio,
-            mime_type="audio/pcm;rate=16000"
-        )
-    )
+    transcript = (response.transcript or "").strip()
 
-    async for response in session.receive():
+    return transcript
 
-        server_content = (
-            response.server_content
-        )
 
-        if not server_content:
-            continue
-
-        # User's speech → text
-        if server_content.input_transcription:
-
-            text = (
-                server_content
-                .input_transcription
-                .text
-            )
-
-            if text:
-                return text
-
-    return None
-
-async def tts(
-    session,
-    text: str
-):
+def tts_stream(text: str, language_code: str, speaker: str = "shubh"):
     """
-    text
-      ↓
-    Gemini Live
-      ↓
-    PCM audio chunks
+    Convert text to speech using Sarvam's streaming Text-to-Speech
+    REST endpoint and yield raw WAV audio chunks as they're
+    generated - no full clip is buffered in memory and nothing is
+    written to disk.
 
-    No .wav file.
+    Output is fixed to 8kHz WAV to match Twilio's telephony audio
+    format, so no resampling is needed downstream.
     """
 
-    # Give text to Gemini
-    await session.send_client_content(
-
-        turns=types.Content(
-            role="user",
-            parts=[
-                types.Part(
-                    text=text
-                )
-            ]
-        ),
-
-        turn_complete=True
+    audio_stream = sarvam_client.text_to_speech.convert_stream(
+        text=text,
+        language_code=language_code,
+        model="bulbul:v3",
+        speaker=speaker,
+        speech_sample_rate=8000,
+        output_audio_codec="wav",
     )
 
-    # Receive generated audio
-    async for response in session.receive():
-
-        server_content = (
-            response.server_content
-        )
-
-        if not server_content:
-            continue
-
-        if server_content.model_turn:
-
-            for part in (
-                server_content
-                .model_turn
-                .parts
-            ):
-
-                if not part.inline_data:
-                    continue
-
-                audio = (
-                    part.inline_data.data
-                )
-
-                if isinstance(
-                    audio,
-                    str
-                ):
-                    audio = base64.b64decode(
-                        audio
-                    )
-
-                # Convert Gemini audio
-                # to Twilio format
-                twilio_audio = (
-                    gemini_to_twilio(
-                        audio
-                    )
-                )
-
-                yield twilio_audio
+    for chunk in audio_stream:
+        if chunk:
+            yield chunk

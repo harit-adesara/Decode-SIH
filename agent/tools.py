@@ -5,7 +5,7 @@ from google import genai
 from google.genai import types
 import requests
 from twilio.rest import Client
-from rag import retrieve_and_rerank
+from .rag import retrieve_and_rerank
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -175,61 +175,142 @@ def end_call(call_sid: str) -> str:
     except Exception as e:
         return f"Failed to end call: {str(e)}"
 
+# @tool
+# def find_healthcare_facility(
+#     location: str,
+#     facility_type: str
+# ) -> str:
+#     """
+#     Find healthcare facilities near a user's location.
+
+#     Use this tool when the user wants to find a:
+#     - PHC
+#     - CHC
+#     - Government hospital
+#     - Private hospital
+#     - Clinic
+#     - Diagnostic center
+
+#     Args:
+#         location:
+#             User's city, locality, village, address, or place.
+
+#         facility_type:
+#             Type of healthcare facility required.
+
+#     Returns:
+#         A list of relevant healthcare facilities with their
+#         names, addresses, and available contact information
+#         when found.
+
+#     This tool only finds facilities. Use calculate_distance()
+#     separately when distance or travel time is required.
+#     """
+
+#     search_query = (
+#         f"Find {facility_type} healthcare facilities near "
+#         f"{location}, India. "
+#         f"Provide facility name, address, and phone number "
+#         f"if available. Prefer official or reliable sources."
+#     )
+
+#     response = client.models.generate_content(
+#         model="gemini-3.1-flash-lite",
+#         contents=search_query,
+#         config=types.GenerateContentConfig(
+#             tools=[
+#                 types.Tool(
+#                     google_search=types.GoogleSearch()
+#                 )
+#             ]
+#         )
+#     )
+
+#     if not response.text:
+#         return "No healthcare facilities were found."
+
+#     return response.text
+
 @tool
 def find_healthcare_facility(
     location: str,
     facility_type: str
 ) -> str:
     """
-    Find healthcare facilities near a user's location.
-
-    Use this tool when the user wants to find a:
-    - PHC
-    - CHC
-    - Government hospital
-    - Private hospital
-    - Clinic
-    - Diagnostic center
-
-    Args:
-        location:
-            User's city, locality, village, address, or place.
-
-        facility_type:
-            Type of healthcare facility required.
-
-    Returns:
-        A list of relevant healthcare facilities with their
-        names, addresses, and available contact information
-        when found.
-
-    This tool only finds facilities. Use calculate_distance()
-    separately when distance or travel time is required.
+    Find healthcare facilities near a user's location
+    using Google Places API (New).
     """
 
-    search_query = (
-        f"Find {facility_type} healthcare facilities near "
-        f"{location}, India. "
-        f"Provide facility name, address, and phone number "
-        f"if available. Prefer official or reliable sources."
-    )
+    url = "https://places.googleapis.com/v1/places:searchText"
 
-    response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
-        contents=search_query,
-        config=types.GenerateContentConfig(
-            tools=[
-                types.Tool(
-                    google_search=types.GoogleSearch()
-                )
-            ]
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": (
+            "places.displayName,"
+            "places.formattedAddress,"
+            "places.nationalPhoneNumber,"
+            "places.location"
         )
-    )
+    }
 
-    if not response.text:
-        return "No healthcare facilities were found."
+    body = {
+        "textQuery": f"{facility_type} near {location}, India",
+        "pageSize": 5
+    }
 
-    return response.text
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=body,
+            timeout=10
+        )
+
+        response.raise_for_status()
+
+        places = response.json().get("places", [])
+
+        if not places:
+            return "No healthcare facilities found."
+
+        results = []
+
+        for place in places:
+            name = place.get("displayName", {}).get(
+                "text", "Unknown"
+            )
+
+            address = place.get(
+                "formattedAddress",
+                "Address unavailable"
+            )
+
+            phone = place.get(
+                "nationalPhoneNumber",
+                "Phone unavailable"
+            )
+
+            location_data = place.get(
+                "location",
+                {}
+            )
+
+            lat = location_data.get("latitude")
+            lng = location_data.get("longitude")
+
+            results.append(
+                f"Name: {name}\n"
+                f"Address: {address}\n"
+                f"Phone: {phone}\n"
+                f"Latitude: {lat}\n"
+                f"Longitude: {lng}"
+            )
+
+        return "\n\n".join(results)
+
+    except Exception as e:
+        return f"Failed to find healthcare facilities: {str(e)}"
 
 @tool
 def emergency_response(

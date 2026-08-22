@@ -1,6 +1,6 @@
 import os
 from langchain_classic.retrievers.document_compressors.cohere_rerank import CohereRerank
-from qdrant import vectorstore
+from .qdrant import vectorstore
 from dotenv import load_dotenv
 
 load_dotenv()

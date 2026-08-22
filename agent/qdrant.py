@@ -1,6 +1,6 @@
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from config.jinaa import embeddings
+from .config import embeddings
 from qdrant_client.models import VectorParams, Distance
 import os
 from dotenv import load_dotenv
