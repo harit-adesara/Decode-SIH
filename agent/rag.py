@@ -1,50 +1,55 @@
 import os
-
+import logging
 from dotenv import load_dotenv
-from langchain_classic.retrievers.document_compressors.cohere_rerank import CohereRerank
-
+import cohere
 from .qdrant import vectorstore
 
 load_dotenv()
 
+logger = logging.getLogger("bharatswasthya.rag")
 
-reranker = CohereRerank(
-    cohere_api_key=os.getenv("COHERE_API_KEY"),
-    top_n=5,
-    model="rerank-v3.5",
-)
+_cohere_key = os.getenv("COHERE_API_KEY")
+cohere_client = cohere.ClientV2(api_key=_cohere_key) if _cohere_key else None
 
 
-def retrieve_and_rerank(query: str):
+def retrieve_and_rerank(query: str) -> str:
+    """
+    Retrieve top matching health scheme documents from Qdrant and rerank them using Cohere.
+    Falls back gracefully to similarity search results if Cohere reranking encounters an issue.
+    """
+    try:
+        docs = vectorstore.similarity_search(query, k=10)
+        docs = [
+            doc for doc in docs
+            if doc.page_content and doc.page_content.strip()
+        ]
 
-    docs = vectorstore.similarity_search(
-        query,
-        k=10,
-    )
+        if not docs:
+            return "No relevant government scheme information found."
 
-    docs = [
-        doc
-        for doc in docs
-        if doc.page_content
-        and doc.page_content.strip()
-    ]
+        doc_texts = [doc.page_content for doc in docs]
 
-    if not docs:
+        if cohere_client:
+            try:
+                rerank_response = cohere_client.rerank(
+                    model="rerank-v3.5",
+                    query=query,
+                    documents=doc_texts,
+                    top_n=min(5, len(doc_texts)),
+                )
+                selected_texts = [
+                    doc_texts[item.index]
+                    for item in rerank_response.results
+                ]
+            except Exception as rerank_err:
+                logger.warning("Cohere rerank failed, falling back to vector search: %s", rerank_err)
+                selected_texts = doc_texts[:5]
+        else:
+            selected_texts = doc_texts[:5]
+
+        context = "\n\n".join(selected_texts).strip()
+        return context or "No relevant government scheme information found."
+
+    except Exception as e:
+        logger.error("RAG retrieval failed: %s", e)
         return "No relevant government scheme information found."
-
-    reranked_docs = reranker.compress_documents(
-        docs,
-        query,
-    )
-
-    context = "\n\n".join(
-        doc.page_content
-        for doc in reranked_docs
-        if doc.page_content
-        and doc.page_content.strip()
-    )
-
-    if not context:
-        return "No relevant government scheme information found."
-
-    return context

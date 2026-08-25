@@ -1,11 +1,8 @@
 import os
-
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from langchain_qdrant import QdrantVectorStore
-
 from .config import embeddings
-
 load_dotenv()
 
 QDRANT_URL = os.getenv("QDRANT_URL")
@@ -22,7 +19,7 @@ client = QdrantClient(
     url=QDRANT_URL,
     api_key=QDRANT_API_KEY,
     timeout=120,
-    prefer_grpc=True,
+    prefer_grpc=False,
 )
 
 

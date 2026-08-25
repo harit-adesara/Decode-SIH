@@ -1,9 +1,7 @@
-from typing import Annotated, Optional
-from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages
+from typing import Optional
+from langchain.agents.middleware import AgentState
 
-class Data(TypedDict, total=False):
-    messages: Annotated[list, add_messages]
+class Data(AgentState, total=False):
     call_sid: str
     phone_number: str
     language: str
