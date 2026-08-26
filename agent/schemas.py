@@ -115,3 +115,68 @@ class TriageAssessment(BaseModel):
         default=None,
         description="Key follow-up guidance or warning signs to watch for"
     )
+
+
+class OutbreakRiskLevel(str, Enum):
+    CRITICAL = "critical"
+    SEVERE = "severe"
+    HIGH = "high"
+    MODERATE = "moderate"
+    LOW = "low"
+
+
+class DiseaseCategory(str, Enum):
+    VIRAL_RESPIRATORY = "Viral Respiratory"
+    VECTOR_BORNE = "Vector-Borne"
+    WATER_FOOD_BORNE = "Water/Food-Borne"
+    ZOONOTIC = "Zoonotic"
+    BACTERIAL = "Bacterial"
+    OTHER = "Other"
+
+
+class ContainmentPriority(str, Enum):
+    EMERGENCY_MOBILIZATION = "Emergency Mobilization"
+    ACTIVE_CONTAINMENT = "Active Containment"
+    TARGETED_ADVISORY = "Targeted Advisory"
+    ROUTINE_MONITORING = "Routine Monitoring"
+
+
+class WeatherVulnerability(str, Enum):
+    EXTREME = "Extreme"
+    HIGH = "High"
+    MODERATE = "Moderate"
+    LOW = "Low"
+
+
+class WeatherFactors(BaseModel):
+    temperature: Optional[str] = Field(default=None, description="Current ambient temperature (e.g. 31°C)")
+    humidity: Optional[str] = Field(default=None, description="Relative humidity level (e.g. 86%)")
+    rainfall_risk: Optional[str] = Field(default=None, description="Rainfall or inundation risk description")
+    air_quality_index: Optional[str] = Field(default=None, description="Air Quality Index assessment")
+    season: Optional[str] = Field(default=None, description="Current climate season (e.g. Monsoon, Winter, Summer)")
+
+
+class EpidemicRiskClassification(BaseModel):
+    classified_risk_level: OutbreakRiskLevel = Field(
+        description="Overall epidemic outbreak risk level classification (critical, severe, high, moderate, low)"
+    )
+    disease_category: DiseaseCategory = Field(
+        description="Primary category classification of the outbreak or disease concern"
+    )
+    containment_priority: ContainmentPriority = Field(
+        description="Public health containment and advisory urgency priority"
+    )
+    weather_vulnerability: WeatherVulnerability = Field(
+        description="Meteorological weather risk vulnerability (humidity, rain, heatwave impact)"
+    )
+    primary_suspected_disease: str = Field(
+        description="Most probable disease or outbreak identified from the forecast or symptoms"
+    )
+    actionable_precautions: list[str] = Field(
+        default_factory=list,
+        description="Top actionable precautions for the caller or local community"
+    )
+    urgency_summary: str = Field(
+        description="Concise conversational summary of risk level and next immediate actions"
+    )
+

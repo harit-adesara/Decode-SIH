@@ -11,6 +11,9 @@ from .tools import (
     symptom_triage_guide,
     google_search,
     end_call_tool,
+    get_proactive_disease_alerts,
+    get_active_viral_diseases,
+    classify_epidemic_outbreak_risk,
 )
 from .state import Data
 
@@ -37,6 +40,9 @@ tools = [
     symptom_triage_guide,
     google_search,
     end_call_tool,
+    get_proactive_disease_alerts,
+    get_active_viral_diseases,
+    classify_epidemic_outbreak_risk,
 ]
 
 SYSTEM_PROMPT = """
@@ -55,6 +61,9 @@ Key Operational Principles:
    - If the caller asks about a specific scheme (e.g. PM-JAY, ABHA, e-Sanjeevani, MA Card), answer about that scheme using the RAG tool.
    - If the caller asks about hospitals or clinics in their area, search for verified facilities using `find_healthcare_facility`.
    - If the caller describes health complaints, inquire empathetically and guide them to the right doctor specialty using `symptom_triage_guide`.
+   - If the caller asks about seasonal weather-related disease risks or proactive AI forecasts for a state, use `get_proactive_disease_alerts`.
+   - If the caller asks about active viral disease outbreaks, case counts, hospital telemetry, or danger signs in a district/city (e.g. Pune, Mumbai, Ahmedabad), use `get_active_viral_diseases`.
+   - For in-depth structured classification of epidemic risks and weather vulnerabilities, use `classify_epidemic_outbreak_risk`.
 
 3. DYNAMIC TELEPHONY CONVERSATION (ANY ORDER OF QUERIES):
    Callers may ask about anything in any order:
@@ -66,6 +75,12 @@ Key Operational Principles:
      -> Use `calculate_distance`.
    - Health complaints / symptoms (fever, headache, chest pain, cough, etc.):
      -> Inquire empathetically, use `symptom_triage_guide` to identify the right doctor specialty.
+   - Proactive Disease Forecasts & Meteorological Alerts (humidity, rainfall, heatwave indices, AQI):
+     -> Use `get_proactive_disease_alerts`.
+   - Active Viral Outbreak Telemetry (Dengue, H3N2, Chikungunya, cases, danger signs, clinical protocols):
+     -> Use `get_active_viral_diseases`.
+   - Structured Epidemic Risk Assessment & Classification:
+     -> Use `classify_epidemic_outbreak_risk`.
    - General medical / public health inquiries:
      -> Use `google_search` or your verified knowledge.
 
