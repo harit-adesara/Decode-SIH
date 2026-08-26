@@ -184,18 +184,11 @@ from .schemas import (
     MedicalSpecialty,
     FacilityType,
     EpidemicRiskClassification,
-    OutbreakRiskLevel,
-    DiseaseCategory,
-    ContainmentPriority,
-    WeatherVulnerability,
 )
 
-PUBLIC_HEALTH_API_BASE_URL = (
-    os.getenv("PUBLIC_HEALTH_API_BASE_URL")
-    or os.getenv("EPIDEMIC_API_BASE_URL")
-    or os.getenv("API_BASE_URL")
-    or "http://localhost:8000"
-)
+PUBLIC_HEALTH_API_BASE_URL = "http://localhost:8000"
+
+PROACTIVE_ADVISORY_API_URL = "https://proactivellm.onrender.com/api/v1/proactive-advisory"
 
 _triage_config = types.GenerateContentConfig(
     temperature=0.1,
@@ -207,92 +200,75 @@ _triage_config = types.GenerateContentConfig(
 @tool
 def get_proactive_disease_alerts(
     state: str,
-    risk_level: str = "",
+    district: str = "",
+    city: str = "",
 ) -> str:
     """
-    Retrieve daily proactive AI disease forecasts correlated with meteorological weather factors (humidity, rainfall, heatwave indices, AQI).
+    Retrieve daily proactive AI disease forecasts, meteorological alerts, and public health advisories for an Indian state, district, or city.
 
     Use this tool when the caller asks about:
-    - Weather-related disease advisories or epidemic forecasts in an Indian state (e.g. Maharashtra, Gujarat, Delhi)
-    - Proactive health risks, seasonal viral/dengue/malaria warnings correlated with rain or humidity
-    - Daily AI disease alerts filtered by risk level ('high', 'severe', 'moderate')
+    - Weather-related disease advisories, meteorological risks, or epidemic forecasts in an Indian location (e.g. Gujarat, Ahmedabad, Maharashtra, Pune)
+    - Proactive health risks, seasonal viral/dengue/malaria warnings correlated with weather, rain, humidity, or AQI
+    - Preventive public health guidance and local clinical advisories
 
     Parameters:
-    - state: Indian State (e.g. 'Maharashtra', 'Delhi', 'Gujarat', 'Karnataka')
-    - risk_level: Optional filter by 'high', 'severe', or 'moderate'
+    - state: Indian State (e.g. 'Gujarat', 'Maharashtra', 'Delhi', 'Karnataka', 'Rajasthan')
+    - district: District name (e.g. 'Ahmedabad', 'Pune', 'Jaipur', 'Surat') (recommended)
+    - city: City or locality name (e.g. 'Ahmedabad', 'Pune') (optional)
     """
-    clean_state = state.strip()
-    url = f"{PUBLIC_HEALTH_API_BASE_URL.rstrip('/')}/api/v1/public/proactive-alerts"
-    params = {"state": clean_state}
-    if risk_level and risk_level.strip():
-        params["riskLevel"] = risk_level.strip().lower()
+    clean_state = (state or "").strip()
+    clean_district = (district or "").strip() or clean_state
+    clean_city = (city or "").strip()
+
+    payload = {
+        "state": clean_state,
+        "district": clean_district,
+    }
+    if clean_city:
+        payload["city"] = clean_city
 
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.post(
+            PROACTIVE_ADVISORY_API_URL,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=35,
+        )
         if response.status_code == 200:
-            payload = response.json()
-            data_body = payload.get("data", {})
-            alerts = data_body.get("alerts", [])
-            count = data_body.get("count", len(alerts))
-            filter_info = data_body.get("filter", {})
+            data = response.json()
+            llm_output = data.get("llm_output")
+            if llm_output and str(llm_output).strip():
+                return wrap_untrusted("PROACTIVE DISEASE ADVISORY", str(llm_output).strip())
 
-            if not alerts:
-                return wrap_untrusted(
-                    "PROACTIVE DISEASE ALERTS",
-                    f"No active proactive disease alerts found for {clean_state}"
-                    + (f" with risk level '{risk_level}'" if risk_level else "")
-                    + "."
-                )
-
-            formatted_alerts = []
-            for idx, item in enumerate(alerts, 1):
-                wf = item.get("weatherFactors", {})
-                weather_str = (
-                    f"Temp: {wf.get('temperature', 'N/A')}, Humidity: {wf.get('humidity', 'N/A')}, "
-                    f"Rainfall Risk: {wf.get('rainfallRisk', 'N/A')}, AQI: {wf.get('airQualityIndex', 'N/A')}, Season: {wf.get('season', 'N/A')}"
-                )
-                precautions = item.get("recommendedPrecautions", [])
-                precautions_str = "; ".join(precautions) if precautions else "Standard precautions apply."
-                symptoms = item.get("symptomsToWatch", [])
-                symptoms_str = ", ".join(symptoms) if symptoms else "N/A"
-
-                district_city = f"{item.get('district', 'All')}, {item.get('state', clean_state)}"
-                if item.get("city") and item.get("city") != "All":
-                    district_city = f"{item.get('city')}, {district_city}"
-
-                alert_text = (
-                    f"Alert #{idx}: {item.get('diseaseName', 'Unknown Disease')} [{item.get('riskLevel', 'unknown').upper()} RISK]\n"
-                    f"- Location: {district_city}\n"
-                    f"- Weather Correlation: {weather_str}\n"
-                    f"- Summary: {item.get('summary', '')}\n"
-                    f"- Symptoms To Watch: {symptoms_str}\n"
-                    f"- Recommended Precautions: {precautions_str}\n"
-                    f"- AI Epidemiological Insights: {item.get('aiInsights', 'N/A')}"
-                )
-                formatted_alerts.append(alert_text)
-
-            header = f"Proactive Disease Forecasts for {clean_state} (Total Alerts: {count}):\n\n"
-            return wrap_untrusted("PROACTIVE DISEASE ALERTS", header + "\n\n".join(formatted_alerts))
+            # Fallback if llm_output key is empty
+            weather_data = data.get("weather_data", {})
+            disease_data = data.get("disease_data", {})
+            fallback_text = (
+                f"Proactive Public Health Telemetry for {clean_district}, {clean_state}:\n"
+                f"Weather Context: {weather_data}\n"
+                f"Epidemiological Data: {disease_data}"
+            )
+            return wrap_untrusted("PROACTIVE DISEASE ADVISORY", fallback_text)
 
         else:
-            logger.warning("Proactive alerts API responded with status %s: %s", response.status_code, response.text)
+            logger.warning("Proactive advisory API responded with status %s: %s", response.status_code, response.text)
             return (
-                f"Proactive alerts endpoint returned status {response.status_code}. "
-                f"Please ensure base URL ({PUBLIC_HEALTH_API_BASE_URL}) is reachable."
+                f"Proactive advisory endpoint returned status {response.status_code}. "
+                f"Please ensure advisory endpoint ({PROACTIVE_ADVISORY_API_URL}) is reachable."
             )
 
     except requests.exceptions.RequestException as req_err:
-        logger.info("Live proactive alerts API unreachable (%s), providing standard public health advisory for %s", req_err, clean_state)
+        logger.info("Live proactive advisory API unreachable (%s), providing standard public health advisory for %s, %s", req_err, clean_district, clean_state)
         return wrap_untrusted(
-            "PROACTIVE DISEASE ALERTS (OFFLINE ADVISORY)",
-            f"Active public health advisory for {clean_state}:\n"
-            f"- Seasonal Meteorological Alert: High monsoon humidity and standing water increase vector-borne (Dengue/Malaria) and water-borne transmission risk.\n"
-            f"- Precautions: Prevent water stagnation in coolers and containers, use mosquito repellents, drink boiled water, and seek immediate medical care if high fever or chills occur.\n"
-            f"- Note: Telemetry API endpoint ({PUBLIC_HEALTH_API_BASE_URL}/api/v1/public/proactive-alerts) currently offline."
+            "PROACTIVE DISEASE ADVISORY (OFFLINE ADVISORY)",
+            f"Active public health advisory for {clean_district}, {clean_state}:\n"
+            f"- Seasonal Meteorological Alert: Fluctuating temperatures and humidity increase risk of seasonal viral respiratory infections and vector-borne diseases (Dengue, Malaria, Chikungunya).\n"
+            f"- Precautions: Prevent water stagnation in open coolers/containers, use mosquito repellents, drink clean/boiled water, and consult a medical professional immediately if experiencing high fever or severe chills.\n"
+            f"- Note: Telemetry API endpoint ({PROACTIVE_ADVISORY_API_URL}) currently offline or timed out."
         )
     except Exception as e:
-        logger.error("Failed to query proactive alerts: %s", e)
-        return f"Error retrieving proactive disease alerts: {str(e)}"
+        logger.error("Failed to query proactive advisory: %s", e)
+        return f"Error retrieving proactive disease advisory: {str(e)}"
 
 
 @tool
