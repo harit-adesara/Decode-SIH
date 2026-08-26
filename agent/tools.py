@@ -176,19 +176,29 @@ def end_call_tool(closing_message: str) -> str:
     return f"CALL_TERMINATED: {closing_message}"
 
 
+from google.genai import types
+from .schemas import TriageAssessment, TriageUrgency, MedicalSpecialty, FacilityType
+
+_triage_config = types.GenerateContentConfig(
+    temperature=0.1,
+    response_mime_type="application/json",
+    response_schema=TriageAssessment,
+)
+
+
 @tool
 def symptom_triage_guide(
     symptoms: str,
     duration_or_context: str = "",
 ) -> str:
     """
-    Provide LLM-powered clinical triage guidance for symptoms reported by the caller.
+    Provide LLM-powered clinical triage guidance for symptoms reported by the caller using Pydantic classification schema.
 
     Parameters:
     - symptoms: Description of the physical complaints (e.g. 'chest discomfort', 'fever and headache', 'knee pain', 'cough for 2 weeks')
     - duration_or_context: Duration or patient background (e.g. '3 days', 'diabetic', 'elderly person')
 
-    Returns clinical urgency (EMERGENCY / URGENT / ROUTINE / HOME_CARE), recommended doctor specialty, facility type, and immediate guidance.
+    Returns clinical urgency (CRITICAL_EMERGENCY / URGENT / ROUTINE / HOME_CARE), recommended doctor specialty, facility type, and immediate guidance.
     """
     gemini_key = os.getenv("GEMINI_API_KEY")
     if gemini_key:
@@ -196,36 +206,51 @@ def symptom_triage_guide(
             client = genai.Client(api_key=gemini_key)
             prompt = (
                 "You are an expert emergency medical triage evaluator for BharatSwasthya AI. "
-                "Analyze the caller's reported symptoms and patient context.\n\n"
-                "Determine:\n"
-                "1. Urgency Level: (CRITICAL_EMERGENCY / URGENT / ROUTINE / HOME_CARE)\n"
-                "2. Recommended Medical Specialty (e.g. Cardiology, Neurology, Orthopedics, Pediatrics, OB/GYN, ENT, Ophthalmology, Dermatology, General Physician)\n"
-                "3. Recommended facility type (e.g. 108 Emergency Ambulance / Emergency Room, PHC, CHC, Specialist Clinic)\n"
-                "4. Immediate lifesaving action (if emergency: emphasize calling 108 ambulance immediately) and follow-up clinical questions.\n\n"
+                "Analyze the caller's reported symptoms and patient context, and classify into structured clinical triage guidance.\n\n"
                 f"Caller Symptoms: {symptoms}\n"
-                f"Context/Duration: {duration_or_context}\n\n"
-                "Triage Assessment:"
+                f"Context/Duration: {duration_or_context}"
             )
             try:
                 response = client.models.generate_content(
                     model="gemini-3.1-flash-lite",
                     contents=prompt,
-                    config={"temperature": 0.1},
+                    config=_triage_config,
                 )
             except Exception:
                 response = client.models.generate_content(
                     model="gemini-2.5-flash-lite",
                     contents=prompt,
-                    config={"temperature": 0.1},
+                    config=_triage_config,
                 )
-            return (response.text or "").strip()
+            triage = TriageAssessment.model_validate_json(response.text or "{}")
+            guidance_extra = f"\n- Follow-up Guidance: {triage.follow_up_guidance}" if triage.follow_up_guidance else ""
+            return (
+                f"TRIAGE ASSESSMENT:\n"
+                f"- Urgency Level: {triage.urgency_level.value}\n"
+                f"- Recommended Specialty: {triage.recommended_specialty.value}\n"
+                f"- Recommended Facility: {triage.recommended_facility.value}\n"
+                f"- Immediate Action: {triage.immediate_action}"
+                f"{guidance_extra}"
+            )
         except Exception as e:
             logger.warning("LLM triage call failed (%s), using fallback triage rules", e)
 
     s = (symptoms or "").lower()
     if any(e in s for e in ["chest", "breathing", "stroke", "bleeding", "heart", "chhati"]):
-        return "TRIAGE: CRITICAL EMERGENCY. Action: Call 108 Emergency Ambulance or rush to nearest Emergency Room immediately. Specialty: Cardiology / Emergency Medicine."
-    return "TRIAGE: Routine Consultation. Recommended Specialty: General Physician / PHC."
+        return (
+            f"TRIAGE ASSESSMENT:\n"
+            f"- Urgency Level: {TriageUrgency.CRITICAL_EMERGENCY.value}\n"
+            f"- Recommended Specialty: {MedicalSpecialty.CARDIOLOGY.value} / {MedicalSpecialty.EMERGENCY_MEDICINE.value}\n"
+            f"- Recommended Facility: {FacilityType.AMBULANCE_108.value}\n"
+            f"- Immediate Action: Call 108 Emergency Ambulance or rush to nearest Emergency Room immediately."
+        )
+    return (
+        f"TRIAGE ASSESSMENT:\n"
+        f"- Urgency Level: {TriageUrgency.ROUTINE.value}\n"
+        f"- Recommended Specialty: {MedicalSpecialty.GENERAL_PHYSICIAN.value}\n"
+        f"- Recommended Facility: {FacilityType.PRIMARY_HEALTH_CENTER.value}\n"
+        f"- Immediate Action: Visit local PHC/clinic for a routine checkup."
+    )
 
 
 @tool

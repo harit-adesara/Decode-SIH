@@ -57,7 +57,17 @@ LANGUAGE_RETRY_TEXT = (
     "Kripya apni bhasha ka naam boliye jaise Hindi, Gujarati, ya English."
 )
 
-RESUME_RETRY_TEXT = "Kripya apna sawal dobara boliye."
+RESUME_RETRY_TEXTS = {
+    "hi-IN": "Kripya apna sawal dobara boliye.",
+    "en-IN": "Please ask your question again.",
+    "gu-IN": "કૃપા કરીને તમારો પ્રશ્ન ફરીથી બોલો.",
+    "mr-IN": "कृपया आपला प्रश्न पुन्हा विचारा.",
+    "bn-IN": "দয়া করে আপনার প্রশ্নটি আবার বলুন।",
+    "ta-IN": "தயவுசெய்து உங்கள் கேள்வியை மீண்டும் கேளுங்கள்.",
+    "te-IN": "దయచేసి మీ ప్రశ్నను మళ్లీ అడగండి.",
+    "kn-IN": "ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಮತ್ತೊಮ್ಮೆ ಕೇಳಿ.",
+    "ml-IN": "ദയവായി നിങ്ങളുടെ ചോദ്യം വീണ്ടും ചോദിക്കുക.",
+}
 
 SUPPORTED_LANGUAGES = {
     "English": "en-IN",
@@ -98,60 +108,108 @@ CLOSING_TEXTS = {
 AGENT_TIMEOUT_TEXTS = {
     "hi-IN": "Mujhe iska jawab dhoondhne mein thoda samay lag raha hai. Kripya apna sawal dobara boliye.",
     "en-IN": "I'm taking a little longer than usual to find that. Could you please repeat your question?",
-    "gu-IN": "Aa mahiti sodhva mate mane thodo samay lagi rahyo chhe. Krupa karine tamaro prashn ferithi bolo.",
+    "gu-IN": "આ માહિતી શોધવામાં થોડો સમય લાગી રહ્યો છે. કૃપા કરીને તમારો પ્રશ્ન ફરીથી બોલો.",
+    "mr-IN": "माहिती शोधण्यासाठी मला थोडा वेळ लागत आहे. कृपया आपला प्रश्न पुन्हा विचारा.",
+    "bn-IN": "তথ্যটি খুঁজতে কিছুটা সময় লাগছে। দয়া করে আপনার প্রশ্নটি আবার বলুন।",
+    "ta-IN": "தகவலைத் தேட சிறிது நேரம் ஆகிறது. தயவுசெய்து உங்கள் கேள்வியை மீண்டும் கேளுங்கள்.",
+    "te-IN": "సమాచారాన్ని కనుగొనడానికి కొంత సమయం పడుతోంది. దయచేసి మీ ప్రశ్నను మళ్లీ అడగండి.",
+    "kn-IN": "ಮಾಹಿತಿಯನ್ನು ಹುಡುಕಲು ಸ್ವಲ್ಪ ಸಮಯ ತೆಗೆದುಕೊಳ್ಳುತ್ತಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಮತ್ತೊಮ್ಮೆ ಕೇಳಿ.",
+    "ml-IN": "വിവരം കണ്ടെത്താൻ അൽപ്പം സമയമെടുക്കുന്നു. ദയവായി നിങ്ങളുടെ ചോദ്യം വീണ്ടും ചോദിക്കുക.",
 }
 
 INACTIVITY_PROMPT_TEXTS = {
     "hi-IN": "Hello, kya aap wahin hain? Agar aapka koi aur sawal ho to kripya boliye.",
     "en-IN": "Hello, are you still there? Please go ahead if you have another question.",
-    "gu-IN": "Hello, tame have pan line par cho? Koi sawal hoy to krupa karine bolo.",
+    "gu-IN": "હેલો, તમે હજી લાઇન પર છો? જો તમારો કોઈ બીજો પ્રશ્ન હોય તો કૃપા કરીને બોલો.",
+    "mr-IN": "हॅलो, आपण तिथे आहात का? जर आपला काही प्रश्न असेल तर कृपया बोला.",
+    "bn-IN": "হ্যালো, আপনি কি লাইনে আছেন? আপনার যদি অন্য কোনো প্রশ্ন থাকে তবে দয়া করে বলুন।",
+    "ta-IN": "ஹலோ, இணைப்பில் இருக்கிறீர்களா? வேறு ஏதேனும் கேள்வி இருந்தால் தயவுசெய்து சொல்லுங்கள்.",
+    "te-IN": "హలో, మీరు లైన్ లో ఉన్నారా? మీకు ఏదైనా ప్రశ్న ఉంటే దయచేసి మాట్లాడండి.",
+    "kn-IN": "ಹಲೋ, ನೀವು ಲೈನ್‌ನಲ್ಲಿದ್ದೀರಾ? ನಿಮಗೆ ಬೇರೆ ಯಾವುದೇ ಪ್ರಶ್ನೆ ಇದ್ದರೆ ದಯವಿಟ್ಟು ಮಾತನಾಡಿ.",
+    "ml-IN": "ഹലോ, നിങ്ങൾ ലൈനിലുണ്ടോ? എന്തെങ്കിലും ചോദ്യമുണ്ടെങ്കിൽ ദയവായി സംസാരിക്കുക.",
 }
 
 INACTIVITY_GOODBYE_TEXTS = {
     "hi-IN": "Mujhe koi jawab nahi mila, isliye main call band kar raha hoon. Zaroorat padne par kripya phir se call kijiye. Namaste!",
     "en-IN": "Since I haven't heard a response, I'll end the call now. Please call again if you need help. Goodbye!",
-    "gu-IN": "Mane koi javab malyo nathi, etle hu call band karu chhu. Jarur padye krupa karine ferithi call karo. Namaste!",
+    "gu-IN": "મને કોઈ જવાબ ન મળ્યો, તેથી હું કોલ સમાપ્ત કરું છું. જરૂર પડે તો ફરીથી કોલ કરજો. નમસ્તે!",
+    "mr-IN": "मला कोणताही प्रतिसाद मिळाला नाही, म्हणून मी कॉल समाप्त करत आहे. गरज असल्यास पुन्हा कॉल करा. नमस्कार!",
+    "bn-IN": "কোনো সাড়া না পাওয়ায় আমি কলটি শেষ করছি। প্রয়োজন হলে আবার কল করবেন। নমস্কার!",
+    "ta-IN": "பதில் எதுவும் வராததால் அழைப்பை முடிக்கிறேன். தேவைப்பட்டால் மீண்டும் அழைக்கவும். வணக்கம்!",
+    "te-IN": "ఎటువంటి సమాధానం రాకపోవడంతో కాల్ ముగిస్తున్నాను. అవసరమైతే మళ్లీ కాల్ చేయండి. నమస్కారం!",
+    "kn-IN": "ಯಾವುದೇ ಪ್ರತಿಕ್ರಿಯೆ ಬಾರದ ಕಾರಣ ಕರೆಯನ್ನು ಕೊನೆಗೊಳಿಸುತ್ತಿದ್ದೇನೆ. ಅಗತ್ಯವಿದ್ದರೆ ಮತ್ತೆ ಕರೆ ಮಾಡಿ. ನಮಸ್ಕಾರ!",
+    "ml-IN": "പ്രതികരണമൊന്നും ലഭിക്കാത്തതിനാൽ കോൾ അവസാനിപ്പിക്കുന്നു. ആവശ്യമെങ്കിൽ വീണ്ടും വിളിക്കുക. നമസ്കാരം!",
+}
+
+SAFETY_DECLINE_TEXTS = {
+    "hi-IN": "Main is prakar ke sawalon mein madad nahi kar sakta. Kripya swasthya ya hospital sambandhit sawal poochiye.",
+    "en-IN": "I cannot assist with this type of request. Please ask a healthcare, hospital, or government scheme related question.",
+    "gu-IN": "હું આવા પ્રકારના પ્રશ્નોમાં મદદ કરી શકતો નથી. કૃપા કરીને સ્વાસ્થ્ય અથવા હોસ્પિટલ સંબંધિત પ્રશ્ન પૂછો.",
+    "mr-IN": "मी अशा प्रकारच्या प्रश्नांमध्ये मदत करू शकत नाही. कृपया आरोग्य किंवा रुग्णालयाशी संबंधित प्रश्न विचारा.",
+    "bn-IN": "আমি এই ধরণের অনুরোধে সাহায্য করতে পারি না। দয়া করে স্বাস্থ্য বা হাসপাতাল সম্পর্কিত প্রশ্ন জিজ্ঞাসা করুন।",
+    "ta-IN": "இந்த வகையான கேள்விகளுக்கு என்னால் உதவ முடியாது. தயவுசெய்து உடல்நலம் அல்லது மருத்துவமனை தொடர்பான கேள்வியைக் கேளுங்கள்.",
+    "te-IN": "నేను ఈ రకమైన ప్రశ్నలకు సహాయం చేయలేను. దయచేసి ఆరోగ్యం లేదా ఆసుపత్రికి సంబంధించిన ప్రశ్నను అడగండి.",
+    "kn-IN": "ನಾನು ಈ ರೀತಿಯ ಪ್ರಶ್ನೆಗಳಿಗೆ ಸಹಾಯ ಮಾಡಲು ಸಾಧ್ಯವಿಲ್ಲ. ದಯವಿಟ್ಟು ಆರೋಗ್ಯ ಅಥವಾ ಆಸ್ಪತ್ರೆಗೆ ಸಂಬಂಧಿಸಿದ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ.",
+    "ml-IN": "ഇത്തരം ചോദ്യങ്ങളിൽ എനിക്ക് സഹായിക്കാനാകില്ല. ദയവായി ആരോഗ്യ അല്ലെങ്കിൽ ആശുപത്രി സംബന്ധമായ ചോദ്യങ്ങൾ ചോദിക്കുക.",
 }
 
 
+PROCESSING_TEXTS = {
+    "hi-IN": "Kripya thoda intezar kijiye, main jankari dekh raha hoon.",
+    "en-IN": "Please wait a moment while I look that up for you.",
+    "gu-IN": "કૃપા કરીને થોડી રાહ જુઓ, હું માહિતી શોધી રહ્યો છું.",
+    "mr-IN": "कृपया थोडा वेळ थांबा, मी माहिती शोधत आहे.",
+    "bn-IN": "অনুগ্রহ করে একটু অপেক্ষা করুন, আমি তথ্যটি খুঁজছি।",
+    "ta-IN": "தயவுசெய்து சிறிது காத்திருங்கள், தகவலைப் பார்க்கிறேன்.",
+    "te-IN": "దయచేసి కొద్దిసేపు వేచి ఉండండి, సమాచారాన్ని చూస్తున్నాను.",
+    "kn-IN": "ದಯವಿಟ್ಟು ಸ್ವಲ್ಪ ಕಾಯಿರಿ, ನಾನು ಮಾಹಿತಿಯನ್ನು ಹುಡುಕುತ್ತಿದ್ದೇನೆ.",
+    "ml-IN": "ദയവായി അല്പം കാത്തിരിക്കുക, വിവരങ്ങൾ പരിശോധിക്കുകയാണ്.",
+}
 
+
+from google import genai
+from google.genai import types
+from agent.schemas import LanguageClassification
+
+_gemini_key = os.getenv("GEMINI_API_KEY")
+_gemini_client = genai.Client(api_key=_gemini_key) if _gemini_key else None
+_lang_config = types.GenerateContentConfig(
+    temperature=0.0,
+    response_mime_type="application/json",
+    response_schema=LanguageClassification,
+)
 
 
 async def identify_language(user_text: str) -> str:
-    """Identify caller's spoken language using Gemini LLM."""
+    """Identify caller's spoken language using Gemini LLM with Pydantic classification schema."""
     if not user_text or not user_text.strip():
         return "Hindi"
 
-    from google import genai
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if gemini_key:
+    if _gemini_client:
+        prompt = (
+            "You are an Indian language identification specialist for a voice healthcare assistant. "
+            "Identify the primary language spoken in this utterance strictly from the supported list: "
+            "Gujarati, Hindi, English, Marathi, Bengali, Tamil, Telugu, Kannada, Malayalam.\n\n"
+            f"Utterance: \"{user_text}\""
+        )
         try:
-            client = genai.Client(api_key=gemini_key)
-            prompt = (
-                "You are an Indian language identification specialist for a voice healthcare assistant. "
-                "Identify the primary language spoken in this utterance. "
-                "Return ONLY the language name strictly from this list: "
-                "Gujarati, Hindi, English, Marathi, Bengali, Tamil, Telugu, Kannada, Malayalam.\n\n"
-                f"Utterance: \"{user_text}\"\nLanguage:"
-            )
             try:
                 response = await asyncio.to_thread(
-                    client.models.generate_content,
+                    _gemini_client.models.generate_content,
                     model="gemini-3.1-flash-lite",
                     contents=prompt,
-                    config={"temperature": 0.0},
+                    config=_lang_config,
                 )
             except Exception:
                 response = await asyncio.to_thread(
-                    client.models.generate_content,
+                    _gemini_client.models.generate_content,
                     model="gemini-2.5-flash-lite",
                     contents=prompt,
-                    config={"temperature": 0.0},
+                    config=_lang_config,
                 )
-            lang = (response.text or "").strip()
-            for valid in SUPPORTED_LANGUAGES.keys():
-                if valid.lower() in lang.lower():
-                    return valid
+            resp_text = (response.text or "").strip()
+            result = LanguageClassification.model_validate_json(resp_text)
+            return result.language.value
         except Exception as e:
             logger.warning("Gemini language identification fallback failed: %s", e)
 
@@ -219,6 +277,18 @@ def get_language_intro(language_code: str) -> str:
 
 def get_closing_text(language_code: str) -> str:
     return CLOSING_TEXTS.get(language_code, CLOSING_TEXTS["hi-IN"])
+
+
+def get_resume_retry_text(language_code: str) -> str:
+    return RESUME_RETRY_TEXTS.get(language_code, RESUME_RETRY_TEXTS["hi-IN"])
+
+
+def get_safety_decline_text(language_code: str) -> str:
+    return SAFETY_DECLINE_TEXTS.get(language_code, SAFETY_DECLINE_TEXTS["hi-IN"])
+
+
+def get_processing_text(language_code: str) -> str:
+    return PROCESSING_TEXTS.get(language_code, PROCESSING_TEXTS["hi-IN"])
 
 
 def get_agent_timeout_text(language_code: str) -> str:
@@ -474,18 +544,14 @@ async def conversation_turn(
         logger.info("Caller query [Turn %d]: %s", turn_count, user_text)
 
         if not user_text:
-            await speak(websocket, stream_sid, RESUME_RETRY_TEXT, language_code, encoding=encoding)
+            await speak(websocket, stream_sid, get_resume_retry_text(language_code), language_code, encoding=encoding)
             return language, language_code, False
 
         # LLM-based input safety & prompt injection check
         guard_result = await asyncio.to_thread(check_input, user_text)
         if guard_result.get("unsafe"):
             logger.warning("Caller input flagged by LLM safety guardrail: %s", guard_result.get("reason"))
-            decline_text = (
-                "હું આવા પ્રકારના પ્રશ્નોમાં મદદ કરી શકતો નથી. કૃપા કરીને સ્વાસ્થ્ય અથવા હોસ્પિટલ સંબંધિત પ્રશ્ન પૂછો."
-                if language_code == "gu-IN"
-                else "Main is prakar ke sawalon mein madad nahi kar sakta. Kripya swasthya ya hospital sambandhit sawal poochiye."
-            )
+            decline_text = get_safety_decline_text(language_code)
             await speak(websocket, stream_sid, decline_text, language_code, encoding=encoding)
             return language, language_code, False
 
@@ -514,6 +580,11 @@ async def conversation_turn(
             "call_ended": False,
         }
 
+        # Concurrently play processing acknowledgment message in caller's language while the agent computes
+        speak_processing_task = asyncio.create_task(
+            speak(websocket, stream_sid, get_processing_text(language_code), language_code, encoding=encoding)
+        )
+
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(workflow.invoke, turn_input, config=config),
@@ -521,8 +592,13 @@ async def conversation_turn(
             )
         except asyncio.TimeoutError:
             logger.warning("Agent exceeded %.0fs timeout | call_sid=%s", AGENT_TIMEOUT_SECONDS, call_sid)
+            if not speak_processing_task.done():
+                await speak_processing_task
             await speak(websocket, stream_sid, get_agent_timeout_text(language_code), language_code, encoding=encoding)
             return language, language_code, False
+        finally:
+            if not speak_processing_task.done():
+                await speak_processing_task
 
         response_text = get_agent_response(result)
         should_end = bool(result.get("call_ended", False))
@@ -546,7 +622,7 @@ async def conversation_turn(
 
     except Exception:
         logger.exception("Conversation turn failed")
-        await speak(websocket, stream_sid, RESUME_RETRY_TEXT, language_code, encoding=encoding)
+        await speak(websocket, stream_sid, get_resume_retry_text(language_code), language_code, encoding=encoding)
         return language, language_code, False
 
 
