@@ -4,6 +4,7 @@ import os
 import re
 import wave
 import asyncio
+import time
 from typing import Generator, Optional
 from dotenv import load_dotenv
 from google import genai
@@ -16,12 +17,17 @@ logger = logging.getLogger("bharatswasthya.speech")
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 sarvam_client = None
+_sarvam_available = bool(SARVAM_API_KEY)
+_sarvam_last_error_ts = 0.0
+SARVAM_COOLDOWN_SECONDS = 300.0  # 5 minute cooldown on failure
+
 if SARVAM_API_KEY:
     try:
         from sarvamai import SarvamAI
         sarvam_client = SarvamAI(api_subscription_key=SARVAM_API_KEY)
     except Exception as e:
         logger.warning("Failed to initialize SarvamAI client: %s", e)
+        _sarvam_available = False
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 gemini_client = None
@@ -43,13 +49,37 @@ EDGE_VOICE_MAP = {
     "ml-IN": "ml-IN-MidhunNeural",
 }
 
+AUDIO_CACHE: dict[str, bytes] = {}
+
+
+def _is_sarvam_usable() -> bool:
+    """Check if Sarvam is enabled and not in cooldown due to quota/network failures."""
+    global _sarvam_available, _sarvam_last_error_ts
+    if not sarvam_client or not _sarvam_available:
+        if _sarvam_last_error_ts and (time.monotonic() - _sarvam_last_error_ts > SARVAM_COOLDOWN_SECONDS):
+            # Attempt recovery after cooldown
+            _sarvam_available = True
+            return True
+        return False
+    return True
+
+
+def _disable_sarvam_temporarily(reason: str):
+    """Trip Sarvam circuit breaker on error to avoid repeated multi-second timeouts."""
+    global _sarvam_available, _sarvam_last_error_ts
+    logger.warning("Disabling Sarvam temporarily due to error: %s", reason)
+    _sarvam_available = False
+    _sarvam_last_error_ts = time.monotonic()
+
 
 def clean_text_for_speech(text: str) -> str:
-    """Strip markdown formatting, symbols, and links so TTS produces natural speech."""
+    """Strip markdown formatting, symbols, brackets, and links so TTS produces natural speech."""
     if not text:
         return ""
     t = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
-    t = re.sub(r"[*_#`~>|-]", " ", t)
+    t = re.sub(r"[*_#`~>|]", " ", t)
+    t = re.sub(r"(\d+)\.\s+", r"\1 ", t)  # turn "1. " into "1 "
+    t = re.sub(r"[-–—]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -74,22 +104,26 @@ async def _generate_edge_tts_pcm(text: str, language_code: str) -> bytes:
     if not cleaned:
         return b""
     voice = EDGE_VOICE_MAP.get(language_code, "hi-IN-MadhurNeural")
-    communicate = edge_tts.Communicate(cleaned, voice)
-    mp3_data = bytearray()
-    async for chunk in communicate.stream():
-        if chunk.get("type") == "audio":
-            mp3_data.extend(chunk.get("data", b""))
+    try:
+        communicate = edge_tts.Communicate(cleaned, voice)
+        mp3_data = bytearray()
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio":
+                mp3_data.extend(chunk.get("data", b""))
 
-    if not mp3_data:
+        if not mp3_data:
+            return b""
+
+        decoded = miniaudio.decode(
+            bytes(mp3_data),
+            nchannels=1,
+            sample_rate=8000,
+            output_format=miniaudio.SampleFormat.SIGNED16,
+        )
+        return decoded.samples.tobytes()
+    except Exception as e:
+        logger.error("Edge TTS generation failed for [%s]: %s", language_code, e)
         return b""
-
-    decoded = miniaudio.decode(
-        bytes(mp3_data),
-        nchannels=1,
-        sample_rate=8000,
-        output_format=miniaudio.SampleFormat.SIGNED16,
-    )
-    return decoded.samples.tobytes()
 
 
 def stt_fallback_gemini(audio_bytes: bytes, language_code: str = "unknown") -> str:
@@ -111,7 +145,8 @@ def stt_fallback_gemini(audio_bytes: bytes, language_code: str = "unknown") -> s
 
         prompt = (
             "You are a speech-to-text system. Transcribe the spoken audio into text in the caller's spoken Indian language/script. "
-            "Output ONLY the exact verbatim transcript. If there is only silence or background noise, return an empty string."
+            "Output ONLY the exact verbatim transcript. If there is only silence or background noise, return an empty string. "
+            "Do not include timestamps, line numbers, or explanations."
         )
         try:
             response = gemini_client.models.generate_content(
@@ -134,6 +169,9 @@ def stt_fallback_gemini(audio_bytes: bytes, language_code: str = "unknown") -> s
         transcript = (response.text or "").strip()
         transcript = re.sub(r"^```[a-z]*\s*", "", transcript)
         transcript = re.sub(r"\s*```$", "", transcript).strip()
+        # Clean up any timestamps like "00:00:00 - 00:00:02"
+        transcript = re.sub(r"^\d{2}:\d{2}:\d{2}\s*-\s*\d{2}:\d{2}:\d{2}\s*", "", transcript)
+        transcript = re.sub(r"^\d{2}:\d{2}\s*-\s*\d{2}:\d{2}\s*", "", transcript).strip()
         return transcript
     except Exception as e:
         logger.warning("Gemini STT fallback failed: %s", e)
@@ -143,7 +181,7 @@ def stt_fallback_gemini(audio_bytes: bytes, language_code: str = "unknown") -> s
 def stt(audio_bytes: bytes, language_code: str = "unknown") -> str:
     """
     Transcribe audio bytes (e.g. from Exotel audio stream) to text.
-    Uses Sarvam STT first, with automatic Gemini STT fallback.
+    Uses Sarvam STT if available and active, otherwise falls back instantly to Gemini STT.
     """
     if not audio_bytes:
         return ""
@@ -159,7 +197,7 @@ def stt(audio_bytes: bytes, language_code: str = "unknown") -> str:
     else:
         wav_bytes = audio_bytes
 
-    if sarvam_client:
+    if _is_sarvam_usable():
         try:
             audio_buffer = io.BytesIO(wav_bytes)
             audio_buffer.name = "recording.wav"
@@ -173,7 +211,7 @@ def stt(audio_bytes: bytes, language_code: str = "unknown") -> str:
             if transcript:
                 return transcript
         except Exception as e:
-            logger.warning("Sarvam STT failed (%s), falling back to Gemini STT", e)
+            _disable_sarvam_temporarily(str(e))
 
     return stt_fallback_gemini(wav_bytes, language_code)
 
@@ -186,7 +224,7 @@ def tts_stream(text: str, language_code: str, speaker: str = "shubh") -> Generat
     if not cleaned:
         return
 
-    if sarvam_client:
+    if _is_sarvam_usable():
         try:
             audio_stream = sarvam_client.text_to_speech.convert_stream(
                 text=cleaned,
@@ -201,7 +239,7 @@ def tts_stream(text: str, language_code: str, speaker: str = "shubh") -> Generat
                     yield chunk
             return
         except Exception as e:
-            logger.warning("Sarvam TTS stream failed (%s), falling back to Edge TTS", e)
+            _disable_sarvam_temporarily(str(e))
 
     try:
         pcm = asyncio.run(_generate_edge_tts_pcm(cleaned, language_code))
@@ -214,13 +252,17 @@ def tts_stream(text: str, language_code: str, speaker: str = "shubh") -> Generat
 async def tts_to_pcm(text: str, language_code: str = "hi-IN", speaker: str = "shubh") -> bytes:
     """
     Convert text to 8kHz 16-bit mono linear PCM bytes.
-    Tries Sarvam TTS, falls back to Edge Neural TTS.
+    Checks memory cache first, tries Sarvam TTS if enabled, falls back to Edge Neural TTS.
     """
     cleaned = clean_text_for_speech(text)
     if not cleaned:
         return b""
 
-    if sarvam_client:
+    cache_key = f"{language_code}:{cleaned}"
+    if cache_key in AUDIO_CACHE:
+        return AUDIO_CACHE[cache_key]
+
+    if _is_sarvam_usable():
         try:
             raw_audio = await asyncio.to_thread(
                 lambda: b"".join(
@@ -235,15 +277,16 @@ async def tts_to_pcm(text: str, language_code: str = "hi-IN", speaker: str = "sh
                 )
             )
             if raw_audio:
-                return wav_to_pcm(raw_audio)
+                pcm = wav_to_pcm(raw_audio)
+                if pcm:
+                    AUDIO_CACHE[cache_key] = pcm
+                    return pcm
         except Exception as e:
-            logger.warning("Sarvam TTS convert failed (%s), falling back to Edge TTS", e)
+            _disable_sarvam_temporarily(str(e))
 
-    try:
-        pcm = await _generate_edge_tts_pcm(cleaned, language_code)
-        if pcm:
-            return pcm
-    except Exception as e:
-        logger.error("Edge TTS conversion failed: %s", e)
+    pcm = await _generate_edge_tts_pcm(cleaned, language_code)
+    if pcm:
+        AUDIO_CACHE[cache_key] = pcm
+        return pcm
 
     return b""

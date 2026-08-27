@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import re
 import struct
 import time
 from typing import Optional
@@ -41,7 +42,7 @@ MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "300"))
 MAX_UTTERANCE_MS = int(os.getenv("VAD_MAX_UTTERANCE_MS", "12000"))
 
 # Response timeouts & Inactivity watchdog
-AGENT_TIMEOUT_SECONDS = float(os.getenv("AGENT_TIMEOUT_SECONDS", "18.0"))
+AGENT_TIMEOUT_SECONDS = float(os.getenv("AGENT_TIMEOUT_SECONDS", "25.0"))
 INACTIVITY_PROMPT_SECONDS = float(os.getenv("INACTIVITY_PROMPT_SECONDS", "25.0"))
 INACTIVITY_HANGUP_SECONDS = float(os.getenv("INACTIVITY_HANGUP_SECONDS", "50.0"))
 WATCHDOG_POLL_SECONDS = 1.0
@@ -419,13 +420,93 @@ class SpeechBuffer:
 AUDIO_CACHE: dict[str, bytes] = {}
 
 
-async def send_exotel_media(
+# Primary sentence & clause delimiters for streaming speech
+PRIMARY_DELIMS = re.compile(
+    r'(?:[\?\!\n\u0964\u0965]+|(?<=[^\d\w\.\/][\w\d]{2})\.(?:\s+|$)|(?<=[^\d\W])\.(?:\s+|$))'
+)
+SECONDARY_DELIMS = re.compile(r'[,;:]+(?:\s+|$)')
+
+
+class SentenceStreamer:
+    """Buffers streaming token deltas and extracts clean, speakable sentences / clauses in real time."""
+
+    def __init__(self, min_first_clause_len: int = 20, min_clause_len: int = 35):
+        self.buffer = ""
+        self.min_first_clause_len = min_first_clause_len
+        self.min_clause_len = min_clause_len
+        self.first_sentence_emitted = False
+
+    def _is_too_short_or_list_prefix(self, text: str) -> bool:
+        cleaned = text.strip(" \t\r\n.,;:!॥।")
+        if not cleaned:
+            return True
+        if cleaned.isdigit() or len(cleaned) <= 2:
+            return True
+        return False
+
+    def push(self, token: str) -> list[str]:
+        if not token:
+            return []
+        self.buffer += token
+        sentences = []
+        while True:
+            split_idx = self._find_split_point()
+            if split_idx == -1:
+                break
+            raw_sentence = self.buffer[:split_idx].strip()
+            if self._is_too_short_or_list_prefix(raw_sentence):
+                break
+            self.buffer = self.buffer[split_idx:].lstrip(" \t\r\n.,;:!॥।")
+            sentence = clean_text_for_speech(raw_sentence)
+            if sentence:
+                sentences.append(sentence)
+                self.first_sentence_emitted = True
+        return sentences
+
+    def flush(self) -> list[str]:
+        rem = self.buffer.strip(" \t\r\n.,;:!॥।")
+        self.buffer = ""
+        sentence = clean_text_for_speech(rem)
+        if sentence:
+            return [sentence]
+        return []
+
+    def _find_split_point(self) -> int:
+        match = PRIMARY_DELIMS.search(self.buffer)
+        if match:
+            # Avoid cutting off inside domain names e.g. 'pmjay.'
+            if match.end() == len(self.buffer) and match.group().endswith("."):
+                return -1
+            cand = self.buffer[:match.end()].strip()
+            if self._is_too_short_or_list_prefix(cand):
+                match2 = PRIMARY_DELIMS.search(self.buffer, match.end())
+                if match2:
+                    return match2.end()
+                return -1
+            return match.end()
+
+        # For fast initial speech, allow comma/semicolon split on early clauses
+        min_len = self.min_first_clause_len if not self.first_sentence_emitted else self.min_clause_len
+        if len(self.buffer) >= min_len:
+            match = SECONDARY_DELIMS.search(self.buffer, min_len - 10)
+            if match:
+                return match.end()
+
+        # Fallback if sentence is very long without punctuation
+        if len(self.buffer) >= 120:
+            last_space = self.buffer.rfind(" ", min_len, 120)
+            if last_space != -1:
+                return last_space + 1
+        return -1
+
+
+async def send_exotel_media_pcm(
     websocket: WebSocket,
     stream_sid: str,
     pcm: bytes,
     encoding: str = "base64",
 ):
-    """Stream audio chunks to Exotel with realistic real-time pacing."""
+    """Send PCM audio frames to Exotel over WebSocket in 100ms packetized chunks."""
     if not pcm:
         return
 
@@ -451,17 +532,37 @@ async def send_exotel_media(
             }
             await websocket.send_text(json.dumps(message))
             await asyncio.sleep(0.090)
+    except Exception as e:
+        logger.debug("Socket media send finished or closed: %s", e)
 
-        # Send mark event when bot finishes playing audio clip
+
+async def send_exotel_mark(
+    websocket: WebSocket,
+    stream_sid: str,
+    mark_name: str = "bot_playback_complete",
+):
+    """Send playback completion mark event."""
+    try:
         mark_msg = {
             "event": "mark",
             "stream_sid": stream_sid,
             "streamSid": stream_sid,
-            "mark": {"name": "bot_playback_complete"},
+            "mark": {"name": mark_name},
         }
         await websocket.send_text(json.dumps(mark_msg))
     except Exception as e:
-        logger.debug("Socket send finished or closed: %s", e)
+        logger.debug("Mark event error: %s", e)
+
+
+async def send_exotel_media(
+    websocket: WebSocket,
+    stream_sid: str,
+    pcm: bytes,
+    encoding: str = "base64",
+):
+    """Stream audio chunks to Exotel and send completion mark."""
+    await send_exotel_media_pcm(websocket, stream_sid, pcm, encoding=encoding)
+    await send_exotel_mark(websocket, stream_sid, "bot_playback_complete")
 
 
 async def speak(
@@ -488,7 +589,8 @@ async def speak(
                 AUDIO_CACHE[cache_key] = pcm
 
         if pcm:
-            await send_exotel_media(websocket, stream_sid, pcm, encoding=encoding)
+            await send_exotel_media_pcm(websocket, stream_sid, pcm, encoding=encoding)
+            await send_exotel_mark(websocket, stream_sid, "bot_playback_complete")
     except Exception as e:
         logger.error("Speak error for [%s]: %s", language_code, e)
 
@@ -523,6 +625,70 @@ async def select_language_turn(
         return "Hindi", "hi-IN"
 
 
+PROCESSING_FILLER_DELAY_SECONDS = float(os.getenv("PROCESSING_FILLER_DELAY_SECONDS", "5.0"))
+
+FAREWELL_USER_WORDS = {
+    # English
+    "no", "nope", "nah", "nothing", "nothing else", "no more", "bye", "goodbye", "bye bye",
+    "thanks", "thank you", "done", "stop", "thats all", "that is all", "no thanks",
+    # Hindi / Hinglish
+    "nahi", "nahin", "na", "na na", "kuch nahi", "kuch nahin", "bas", "alvida", "shukriya",
+    "dhanyawad", "dhanyavad", "kuch nahi chahiye", "koi sawal nahi", "kuch aur nahi",
+    "नहीं", "ना", "ना ना", "कुछ नहीं", "बस", "अलविदा", "शुक्रिया", "धन्यवाद", "कोई सवाल नहीं",
+    # Gujarati / Gujlish
+    "kai nahi", "kai nathi", "aavjo", "avjo", "aabhar", "kashu nahi", "kashu nathi", "nathi joi tu",
+    "ના", "ના ના", "નાના", "કંઈ નહીં", "કંઈ નહિ", "કશું નહીં", "આવજો", "આભાર", "કંઈ નથી", "નથી",
+    "તમારો આભાર", "હવે કંઈ નથી", "હવે કઈ નથી",
+    # Marathi
+    "kahi nahi", "nako", "namaskar", "काही नाही", "नको", "नमस्कार",
+    # Bengali
+    "kichu na", "dhonnobad", "aar kichu na", "কিছু না", "ধন্যবাদ", "আর কিছু না",
+    # South Indian
+    "illai", "vendam", "nandri", "இல்லை", "நன்றி",
+    "ledu", "em ledu", "vaddu", "లేదు", "ఏం లేదు",
+    "illa", "enu illa", "beda", "ಇಲ್ಲ", "ಏನು ಇಲ್ಲ",
+    "onnum illa", "nanni", "venda", "ഇല്ല", "ഒന്നുമില്ല", "നന്ദി",
+}
+
+FAREWELL_BOT_KEYWORDS = [
+    # Gujarati
+    "આવજો", "ધ્યાન રાખજો", "આનંદ થયો", "કોલ કરવા બદલ આભાર", "વાત કરવા બદલ આભાર", "નમસ્તે", "સાથે વાત કરીને", "શુભ દિવસ",
+    # Hindi / Hinglish
+    "ख्याल रखिए", "ख्याल रखना", "अलविदा", "धन्यवाद", "शुभ दिन", "नमस्ते", "बात करने के लिए धन्यवाद",
+    "khayal rakhiye", "khayal rakhna", "alvida", "dhanyavaad", "dhanyavad", "shubh din", "baat karne ke liye dhanyavaad",
+    # English
+    "goodbye", "take care", "stay healthy", "thank you for calling", "have a great day", "have a nice day",
+    # Regional
+    "bhalo thakben", "gavanamaaga", "jagrattaga", "nodikolli", "sradhikkuka", "aabhar", "potanu dhyan",
+]
+
+
+def is_closing_intent(text: str) -> bool:
+    """Detect if caller is declining further help or concluding the call."""
+    if not text:
+        return False
+    cleaned = re.sub(r"[\.\?\!\,\:\;\-\_]", "", text.strip().lower()).strip()
+    cleaned_no_spaces = re.sub(r"\s+", " ", cleaned)
+    if cleaned_no_spaces in FAREWELL_USER_WORDS or text.strip() in FAREWELL_USER_WORDS:
+        return True
+    for word in FAREWELL_USER_WORDS:
+        if cleaned_no_spaces == word or cleaned_no_spaces.startswith(word + " ") or cleaned_no_spaces.endswith(" " + word):
+            if len(cleaned_no_spaces.split()) <= 4:
+                return True
+    return False
+
+
+def contains_closing_phrase(text: str) -> bool:
+    """Detect if bot response contains farewell/call-ending phrases."""
+    if not text:
+        return False
+    t_lower = text.lower()
+    for phrase in FAREWELL_BOT_KEYWORDS:
+        if phrase.lower() in t_lower:
+            return True
+    return False
+
+
 async def conversation_turn(
     websocket: WebSocket,
     stream_sid: str,
@@ -534,7 +700,10 @@ async def conversation_turn(
     turn_count: int,
     encoding: str = "base64",
 ) -> tuple[str, str, bool]:
-    """Execute dynamic healthcare conversation turn with LangGraph workflow."""
+    """
+    Execute low-latency streaming healthcare conversation turn:
+    Tokens stream from LangGraph -> split to sentences -> pipelined TTS -> streamed to Exotel WebSocket in real time.
+    """
     language = current_language or "Hindi"
     language_code = current_language_code or "hi-IN"
 
@@ -580,42 +749,167 @@ async def conversation_turn(
             "call_ended": False,
         }
 
-        # Concurrently play processing acknowledgment message in caller's language while the agent computes
-        speak_processing_task = asyncio.create_task(
-            speak(websocket, stream_sid, get_processing_text(language_code), language_code, encoding=encoding)
-        )
+        user_is_closing = is_closing_intent(user_text)
+        should_end = bool(user_is_closing)
+
+        sentence_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        audio_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
+        streamer = SentenceStreamer()
+        full_tokens: list[str] = []
+        first_token_event = asyncio.Event()
+
+        # Adaptive delayed processing filler:
+        # Only triggers if computation/tool execution takes > PROCESSING_FILLER_DELAY_SECONDS.
+        # If the LLM generates tokens before 2.0s, this task is cancelled and plays nothing.
+        async def adaptive_filler_worker():
+            if user_is_closing:
+                return
+            try:
+                await asyncio.sleep(PROCESSING_FILLER_DELAY_SECONDS)
+                if not first_token_event.is_set():
+                    logger.info("Agent tool computation taking > %.1fs, playing filler [%s]", PROCESSING_FILLER_DELAY_SECONDS, language_code)
+                    filler_pcm = await tts_to_pcm(get_processing_text(language_code), language_code)
+                    if filler_pcm and not first_token_event.is_set():
+                        await send_exotel_media_pcm(websocket, stream_sid, filler_pcm, encoding=encoding)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.debug("Adaptive filler error: %s", e)
+
+        filler_task = asyncio.create_task(adaptive_filler_worker())
+
+        async def llm_token_producer():
+            nonlocal should_end
+            try:
+                async for event in workflow.astream_events(turn_input, config=config, version="v2"):
+                    kind = event.get("event")
+                    if kind == "on_chat_model_stream":
+                        # Only stream conversational agent tokens, ignore SMS summary & call finalization nodes
+                        node = event.get("metadata", {}).get("langgraph_node")
+                        if node in ("send_sms", "end_call"):
+                            continue
+
+                        chunk = event.get("data", {}).get("chunk")
+                        if not chunk:
+                            continue
+                        # Skip tool call argument streaming chunks
+                        if getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None):
+                            continue
+                        content = getattr(chunk, "content", "")
+                        if not content:
+                            continue
+                        if isinstance(content, list):
+                            text = "".join(
+                                p.get("text", "") if isinstance(p, dict) else str(p)
+                                for p in content
+                            )
+                        else:
+                            text = str(content)
+                        if not text:
+                            continue
+
+                        if not first_token_event.is_set():
+                            first_token_event.set()
+                            if not filler_task.done():
+                                filler_task.cancel()
+
+                        full_tokens.append(text)
+                        new_sentences = streamer.push(text)
+                        for s in new_sentences:
+                            if any(k in s for k in ("CALL_TERMINATED:", "CALL_ENDED:", "CALL TERMINATED:", "CALL ENDED:")) or contains_closing_phrase(s):
+                                should_end = True
+                            clean_s = re.sub(r"CALL[_\s](?:TERMINATED|ENDED):?", "", s, flags=re.IGNORECASE).strip()
+                            if clean_s:
+                                await sentence_queue.put(clean_s)
+
+                # Flush remaining buffer at the end of LLM generation
+                remaining_sentences = streamer.flush()
+                for s in remaining_sentences:
+                    if any(k in s for k in ("CALL_TERMINATED:", "CALL_ENDED:", "CALL TERMINATED:", "CALL ENDED:")) or contains_closing_phrase(s):
+                        should_end = True
+                    clean_s = re.sub(r"CALL[_\s](?:TERMINATED|ENDED):?", "", s, flags=re.IGNORECASE).strip()
+                    if clean_s:
+                        await sentence_queue.put(clean_s)
+
+            except Exception as e:
+                logger.exception("LLM token streaming error: %s", e)
+            finally:
+                if not filler_task.done():
+                    filler_task.cancel()
+                await sentence_queue.put(None)
+
+        async def tts_worker():
+            try:
+                while True:
+                    sentence = await sentence_queue.get()
+                    if sentence is None:
+                        sentence_queue.task_done()
+                        break
+                    logger.info("Streaming TTS synthesizing [%s]: %s", language_code, sentence)
+                    pcm = await tts_to_pcm(sentence, language_code)
+                    if pcm:
+                        await audio_queue.put(pcm)
+                    sentence_queue.task_done()
+            except Exception as e:
+                logger.error("Streaming TTS worker failed: %s", e)
+            finally:
+                await audio_queue.put(None)
+
+        async def audio_player_worker():
+            total_audio_bytes = 0
+            try:
+                while True:
+                    pcm = await audio_queue.get()
+                    if pcm is None:
+                        audio_queue.task_done()
+                        break
+                    total_audio_bytes += len(pcm)
+                    await send_exotel_media_pcm(websocket, stream_sid, pcm, encoding=encoding)
+                    audio_queue.task_done()
+                if total_audio_bytes > 0:
+                    await send_exotel_mark(websocket, stream_sid, "bot_playback_complete")
+            except Exception as e:
+                logger.debug("Audio playback worker closed: %s", e)
+
+        # 1. Start LLM token producer with generation timeout
+        producer_task = asyncio.create_task(llm_token_producer())
+        tts_task = asyncio.create_task(tts_worker())
+        player_task = asyncio.create_task(audio_player_worker())
 
         try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(workflow.invoke, turn_input, config=config),
-                timeout=AGENT_TIMEOUT_SECONDS,
-            )
+            # Timeout only guards the LLM token generation phase
+            await asyncio.wait_for(producer_task, timeout=AGENT_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
-            logger.warning("Agent exceeded %.0fs timeout | call_sid=%s", AGENT_TIMEOUT_SECONDS, call_sid)
-            if not speak_processing_task.done():
-                await speak_processing_task
-            await speak(websocket, stream_sid, get_agent_timeout_text(language_code), language_code, encoding=encoding)
-            return language, language_code, False
-        finally:
-            if not speak_processing_task.done():
-                await speak_processing_task
+            logger.warning("Agent LLM generation exceeded %.0fs timeout | call_sid=%s", AGENT_TIMEOUT_SECONDS, call_sid)
+            producer_task.cancel()
+            if not filler_task.done():
+                filler_task.cancel()
+            await sentence_queue.put(None)
+            if not full_tokens:
+                tts_task.cancel()
+                player_task.cancel()
+                await speak(websocket, stream_sid, get_agent_timeout_text(language_code), language_code, encoding=encoding)
+                return language, language_code, False
 
-        response_text = get_agent_response(result)
-        should_end = bool(result.get("call_ended", False))
+        # 2. Wait for TTS synthesis and WebSocket audio playback to complete naturally
+        await asyncio.gather(tts_task, player_task)
 
-        if response_text:
-            if "CALL_TERMINATED:" in response_text or "CALL_ENDED:" in response_text:
-                response_text = response_text.replace("CALL_TERMINATED:", "").replace("CALL_ENDED:", "").strip()
+        # Verify state from checkpoint if call ended
+        try:
+            snapshot = workflow.get_state(config)
+            if snapshot and snapshot.values and snapshot.values.get("call_ended"):
                 should_end = True
+        except Exception:
+            pass
 
-            await speak(websocket, stream_sid, response_text, language_code, encoding=encoding)
-        else:
+        # If no tokens were generated at all, play fallback closing
+        if not full_tokens:
             closing = get_closing_text(language_code)
             await speak(websocket, stream_sid, closing, language_code, encoding=encoding)
             should_end = True
 
         if should_end:
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(0.8)
             return language, language_code, True
 
         return language, language_code, False
