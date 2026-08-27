@@ -794,21 +794,24 @@ async def conversation_turn(
             await speak(websocket, stream_sid, get_resume_retry_text(language_code), language_code, encoding=encoding)
             return language, language_code, False
 
-        # LLM-based input safety & prompt injection check
-        guard_result = await asyncio.to_thread(check_input, user_text)
+        # Concurrent LLM safety guardrail & dynamic language detection (low-latency parallel execution)
+        guard_task = asyncio.to_thread(check_input, user_text)
+        lang_task = identify_language(user_text) if len(user_text.split()) >= 2 else None
+
+        if lang_task:
+            guard_result, detected_lang = await asyncio.gather(guard_task, lang_task)
+            if detected_lang and detected_lang != language:
+                language = detected_lang
+                language_code = get_language_code(language)
+                logger.info("Language dynamically updated via LLM: %s (%s)", language, language_code)
+        else:
+            guard_result = await guard_task
+
         if guard_result.get("unsafe"):
             logger.warning("Caller input flagged by LLM safety guardrail: %s", guard_result.get("reason"))
             decline_text = get_safety_decline_text(language_code)
             await speak(websocket, stream_sid, decline_text, language_code, encoding=encoding)
             return language, language_code, False
-
-        # Dynamic LLM language detection if language switches
-        if len(user_text.split()) >= 2:
-            detected_lang = await identify_language(user_text)
-            if detected_lang and detected_lang != language:
-                language = detected_lang
-                language_code = get_language_code(language)
-                logger.info("Language dynamically updated via LLM: %s (%s)", language, language_code)
 
         config = {
             "configurable": {
@@ -827,8 +830,10 @@ async def conversation_turn(
             "call_ended": False,
         }
 
-        user_is_closing = await is_closing_intent_llm(user_text, current_language=language)
-        should_end = bool(user_is_closing)
+        # The ReAct Agent inside LangGraph natively detects closing intent and invokes end_call_tool.
+        # Fast 0ms in-memory heuristic check used only to suppress filler audio if user says a quick farewell token.
+        is_quick_farewell = is_closing_intent_heuristic(user_text)
+        should_end = False
 
         sentence_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
         audio_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
@@ -840,7 +845,7 @@ async def conversation_turn(
         # Only triggers if computation/tool execution takes > PROCESSING_FILLER_DELAY_SECONDS.
         # If the LLM generates tokens before 2.0s, this task is cancelled and plays nothing.
         async def adaptive_filler_worker():
-            if user_is_closing:
+            if is_quick_farewell:
                 return
             try:
                 await asyncio.sleep(PROCESSING_FILLER_DELAY_SECONDS)
