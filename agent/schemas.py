@@ -32,6 +32,16 @@ class LanguageClassification(BaseModel):
     )
 
 
+class CallClosingClassification(BaseModel):
+    is_closing: bool = Field(
+        description="True if the caller is concluding the call, declining further assistance, saying goodbye or thank you to finish, or expressing that they have no more questions"
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="Brief rationale for closing intent classification"
+    )
+
+
 class SafetyCategory(str, Enum):
     NONE = "none"   
     PROMPT_INJECTION = "prompt_injection"

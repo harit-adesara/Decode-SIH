@@ -170,7 +170,7 @@ PROCESSING_TEXTS = {
 
 from google import genai
 from google.genai import types
-from agent.schemas import LanguageClassification
+from agent.schemas import LanguageClassification, CallClosingClassification
 
 _gemini_key = os.getenv("GEMINI_API_KEY")
 _gemini_client = genai.Client(api_key=_gemini_key) if _gemini_key else None
@@ -178,6 +178,11 @@ _lang_config = types.GenerateContentConfig(
     temperature=0.0,
     response_mime_type="application/json",
     response_schema=LanguageClassification,
+)
+_closing_config = types.GenerateContentConfig(
+    temperature=0.0,
+    response_mime_type="application/json",
+    response_schema=CallClosingClassification,
 )
 
 
@@ -663,8 +668,8 @@ FAREWELL_BOT_KEYWORDS = [
 ]
 
 
-def is_closing_intent(text: str) -> bool:
-    """Detect if caller is declining further help or concluding the call."""
+def is_closing_intent_heuristic(text: str) -> bool:
+    """Fast rule-based/regex fallback for detecting if caller is concluding the call."""
     if not text:
         return False
     cleaned = re.sub(r"[\.\?\!\,\:\;\-\_]", "", text.strip().lower()).strip()
@@ -676,6 +681,79 @@ def is_closing_intent(text: str) -> bool:
             if len(cleaned_no_spaces.split()) <= 4:
                 return True
     return False
+
+
+async def is_closing_intent_llm(user_text: str, current_language: str = "Hindi") -> bool:
+    """
+    LLM-based structured closing intent classification across all 9 Indian languages and English.
+    Determines if caller wants to conclude the conversation, declines further help, or says goodbye.
+    Falls back gracefully to fast heuristic if Gemini API is unreachable.
+    """
+    if not user_text or not user_text.strip():
+        return False
+
+    cleaned_quick = re.sub(r"[\.\?\!\,\:\;\-\_]", "", user_text.strip().lower()).strip()
+    # Immediate shortcut for single-word universally unambiguous closing words
+    if cleaned_quick in ("bye", "goodbye", "alvida", "aavjo", "avjo", "namaste", "dhanyavaad", "dhanyavad", "shukriya", "aabhar", "thanks", "thank you", "stop"):
+        return True
+
+    if _gemini_client:
+        prompt = (
+            "You are an intent classification expert for BharatSwasthya AI, a multilingual Indian voice healthcare assistant.\n"
+            "Determine if the caller's spoken utterance indicates they are concluding the phone call, declining further help, saying thank you/goodbye, or stating they have no further questions.\n\n"
+            f"Active Language Context: {current_language}\n"
+            "Supported languages: Gujarati, Hindi, English, Marathi, Bengali, Tamil, Telugu, Kannada, Malayalam (both native scripts and Latin transliteration e.g. Hinglish, Gujlish).\n\n"
+            "Classification Rules:\n"
+            "- Set is_closing to true if the caller expresses satisfaction, says no more questions, says thanks/bye to finish, or clearly indicates the call is done.\n"
+            "- Set is_closing to false if the caller is asking a medical/health question, describing symptoms, asking about hospital or government schemes, or asking any follow-up question.\n\n"
+            "Examples of CLOSING intent (is_closing: true):\n"
+            "- 'Nahi, ab kuch nahi chahiye, dhanyawaad'\n"
+            "- 'No thank you, that is all'\n"
+            "- 'Have kai nathi joi tu, aabhar'\n"
+            "- 'ના હવે કંઈ નથી પૂછવું, તમારો આભાર'\n"
+            "- 'Bas itna hi tha, alvida'\n"
+            "- 'Kahi nako, namaskar'\n"
+            "- 'Aar kichu na, dhonnobad'\n"
+            "- 'Illai, nandri'\n"
+            "- 'Em ledu, thanks'\n"
+            "- 'Enu beda, dhanyavada'\n"
+            "- 'Onnum illa, nanni'\n\n"
+            "Examples of NOT closing intent (is_closing: false):\n"
+            "- 'Mujhe kal se bukhar hai'\n"
+            "- 'Civil hospital kitni door hai?'\n"
+            "- 'Ayushman card kaise banwaye?'\n"
+            "- 'Mane pet ma dard thay che'\n"
+            "- 'Doctor kahan milenge?'\n"
+            "- 'Nahi mere paas Aadhar card hai, aage kya karein?' (This is clarifying a scheme question, not closing)\n\n"
+            f"Caller Utterance: \"{user_text}\""
+        )
+        try:
+            try:
+                response = await asyncio.to_thread(
+                    _gemini_client.models.generate_content,
+                    model="gemini-3.1-flash-lite",
+                    contents=prompt,
+                    config=_closing_config,
+                )
+            except Exception:
+                response = await asyncio.to_thread(
+                    _gemini_client.models.generate_content,
+                    model="gemini-2.5-flash-lite",
+                    contents=prompt,
+                    config=_closing_config,
+                )
+            resp_text = (response.text or "").strip()
+            result = CallClosingClassification.model_validate_json(resp_text)
+            logger.info("LLM closing intent detection: %s (reason: %s) for input: '%s'", result.is_closing, result.reason, user_text)
+            return result.is_closing
+        except Exception as e:
+            logger.warning("LLM closing intent check failed (%s), using heuristic fallback", e)
+
+    return is_closing_intent_heuristic(user_text)
+
+
+# Backwards compatibility alias
+is_closing_intent = is_closing_intent_heuristic
 
 
 def contains_closing_phrase(text: str) -> bool:
@@ -749,7 +827,7 @@ async def conversation_turn(
             "call_ended": False,
         }
 
-        user_is_closing = is_closing_intent(user_text)
+        user_is_closing = await is_closing_intent_llm(user_text, current_language=language)
         should_end = bool(user_is_closing)
 
         sentence_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
