@@ -186,7 +186,7 @@ from .schemas import (
     EpidemicRiskClassification,
 )
 
-PUBLIC_HEALTH_API_BASE_URL = "http://localhost:8000"
+PUBLIC_HEALTH_API_BASE_URL = "https://decodesih-website.onrender.com"
 
 PROACTIVE_ADVISORY_API_URL = "https://proactivellm.onrender.com/api/v1/proactive-advisory"
 
