@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from .guardrails import check_output, sanitize_output
-from .tools import hangup_exotel_call
 
 load_dotenv()
 
@@ -16,79 +15,73 @@ gemini_client = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
 )
 
-EXOTEL_ACCOUNT_SID = os.getenv("EXOTEL_ACCOUNT_SID") or os.getenv("ACCOUNT_SID")
-EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY") or os.getenv("API_KEY")
-EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN") or os.getenv("API_TOKEN")
-EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
-EXOPHONE = os.getenv("EXOPHONE") or os.getenv("EXOTEL_PHONE_NUMBER") or os.getenv("EXOTEL_FROM")
+SMSMOBILEAPI_URL = (
+    os.getenv("SMSMOBILEAPI_URL")
+    or os.getenv("SMS_MOBILE_API_URL")
+    or "https://api.smsmobileapi.com/sendsms/"
+).strip().strip('"').strip("'")
 
-MSG91_URL = "https://control.msg91.com/api/v5/flow"
-MSG91_AUTHKEY = os.getenv("MSG91_AUTHKEY")
-MSG91_FLOW_ID = os.getenv("MSG91_FLOW_ID")
+SMSMOBILEAPI_KEY = (
+    os.getenv("SMSMOBILEAPI_KEY")
+    or os.getenv("SMSMOBILEAPI_API_KEY")
+    or os.getenv("SMS_MOBILE_API_KEY")
+    or ""
+).strip().strip('"').strip("'")
 
 
-def _send_sms_via_exotel(to_number: str, message: str) -> dict:
-    """Send SMS via Exotel SMS REST API."""
-    if not (EXOTEL_ACCOUNT_SID and EXOTEL_API_KEY and EXOTEL_API_TOKEN):
-        raise ValueError("Exotel SMS credentials (ACCOUNT_SID, API_KEY, API_TOKEN) missing")
+def _send_sms_via_smsmobileapi(to_number: str, message: str) -> dict:
+    """Send SMS via SMSMobileAPI gateway."""
+    if not SMSMOBILEAPI_KEY:
+        raise ValueError("SMSMobileAPI key (SMSMOBILEAPI_KEY) missing from environment")
 
-    clean_to = to_number.strip().lstrip("+")
-    if clean_to.startswith("91") and len(clean_to) == 12:
-        clean_to = clean_to[2:]
-    if clean_to.startswith("0") and len(clean_to) == 11:
-        clean_to = clean_to[1:]
+    clean_to = to_number.strip()
+    if not clean_to.startswith("+"):
+        if len(clean_to) == 10:
+            clean_to = f"+91{clean_to}"
+        elif len(clean_to) == 11 and clean_to.startswith("0"):
+            clean_to = f"+91{clean_to[1:]}"
+        elif len(clean_to) == 12 and clean_to.startswith("91"):
+            clean_to = f"+{clean_to}"
+        else:
+            clean_to = f"+{clean_to}"
 
-    url = f"https://{EXOTEL_SUBDOMAIN}/v1/Accounts/{EXOTEL_ACCOUNT_SID}/Sms/send.json"
+    url = SMSMOBILEAPI_URL.rstrip("/") + "/"
     payload = {
-        "From": EXOPHONE or "",
-        "To": clean_to,
-        "Body": message,
+        "apikey": SMSMOBILEAPI_KEY,
+        "recipients": clean_to,
+        "message": message,
     }
 
+    logger.info("Sending SMS via SMSMobileAPI to %s", clean_to)
     resp = requests.post(
         url,
-        auth=(EXOTEL_API_KEY, EXOTEL_API_TOKEN),
         data=payload,
         timeout=15,
     )
     resp.raise_for_status()
-    return resp.json()
 
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"response": resp.text}
 
-def _send_sms_via_msg91(to_number: str, message: str) -> dict:
-    """Send SMS via MSG91 flow API if configured."""
-    if not (MSG91_AUTHKEY and MSG91_FLOW_ID):
-        raise ValueError("MSG91 credentials missing")
+    # Verify if SMSMobileAPI reported an error in the response payload
+    if isinstance(data, dict):
+        result_info = data.get("result")
+        if isinstance(result_info, dict):
+            if result_info.get("error") not in (0, "0", None, False):
+                err_msg = result_info.get("message") or result_info.get("error") or "Failed to send SMS"
+                raise RuntimeError(f"SMSMobileAPI error: {err_msg}")
+        elif data.get("error") and data.get("error") not in (0, "0", False):
+            raise RuntimeError(f"SMSMobileAPI error: {data.get('error')}")
 
-    payload = {
-        "template_id": MSG91_FLOW_ID,
-        "short_url": "0",
-        "recipients": [
-            {
-                "mobiles": to_number,
-                "message": message,
-            }
-        ],
-    }
-    headers = {
-        "accept": "application/json",
-        "authkey": MSG91_AUTHKEY,
-        "content-type": "application/json",
-    }
-    resp = requests.post(
-        MSG91_URL,
-        json=payload,
-        headers=headers,
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    return data
 
 
 def send_sms_node(state):
     """
     Summarize the healthcare call with Gemini, run the summary through
-    the output guardrail, and text it to the caller via Exotel (or fallback provider).
+    the output guardrail, and text it to the caller via SMSMobileAPI.
     """
     phone_number = state.get("phone_number")
     messages = state.get("messages", [])
@@ -193,31 +186,28 @@ Conversation:
             "for medical decisions."
         )
 
-        sms_result = None
+        sms_result = _send_sms_via_smsmobileapi(phone_number, message_body)
         sms_sid = None
-
-        # Try Exotel SMS first
-        if EXOTEL_ACCOUNT_SID and EXOTEL_API_KEY and EXOTEL_API_TOKEN:
-            try:
-                sms_result = _send_sms_via_exotel(phone_number, message_body)
-                sms_sid = str(sms_result.get("SMSMessage", {}).get("Sid") or sms_result.get("sid") or "exotel_sms")
-            except Exception as exotel_err:
-                logger.warning("Exotel SMS failed, trying fallback: %s", exotel_err)
-
-        # Try MSG91 fallback if Exotel was not configured or failed
-        if not sms_result and MSG91_AUTHKEY and MSG91_FLOW_ID:
-            try:
-                sms_result = _send_sms_via_msg91(phone_number, message_body)
-                sms_sid = "msg91_sms"
-            except Exception as msg91_err:
-                logger.warning("MSG91 SMS fallback failed: %s", msg91_err)
+        if isinstance(sms_result, dict):
+            result_info = sms_result.get("result", {})
+            if isinstance(result_info, dict):
+                sms_sid = str(
+                    result_info.get("id")
+                    or result_info.get("message_id")
+                    or result_info.get("sent")
+                    or "smsmobileapi_sms"
+                )
+            else:
+                sms_sid = str(sms_result.get("id") or "smsmobileapi_sms")
+        else:
+            sms_sid = "smsmobileapi_sms"
 
         return {
             **state,
-            "sms_sent": sms_result is not None,
+            "sms_sent": True,
             "sms_sid": sms_sid,
             "sms_summary": summary,
-            "sms_error": None if sms_result else "SMS provider unavailable or credentials missing",
+            "sms_error": None,
         }
 
     except Exception as e:
