@@ -171,7 +171,7 @@ def end_call_tool(closing_message: str) -> str:
     Use this tool when the caller indicates they are done, says 'no' / 'no more questions' / 'thank you' / 'bye' / 'goodbye', or wants to end the phone call.
 
     Parameters:
-    - closing_message: A warm, polite closing greeting in the caller's spoken language (e.g. Gujarati: 'તમારી સાથે વાત કરીને આનંદ થયો. પોતાનું ધ્યાન રાખજો, આવજો!', Hindi: 'BharatSwasthya AI se baat karne ke liye dhanyavaad. Apna khayal rakhiye. Namaste!').
+    - closing_message: A warm, polite farewell greeting STRICTLY matching the caller's chosen language (e.g. Hindi: 'BharatSwasthya AI se baat karne ke liye dhanyavaad. Apna khayal rakhiye. Namaste!', English: 'Thank you for calling BharatSwasthya AI. Take care and stay healthy. Goodbye!', Gujarati: 'BharatSwasthya AI sathe vaat karva badal aabhar. Potanu dhyan rakhjo. Namaste!').
     """
     return f"CALL_TERMINATED: {closing_message}"
 

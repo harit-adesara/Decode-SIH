@@ -796,7 +796,8 @@ async def conversation_turn(
 
         # Concurrent LLM safety guardrail & dynamic language detection (low-latency parallel execution)
         guard_task = asyncio.to_thread(check_input, user_text)
-        lang_task = identify_language(user_text) if len(user_text.split()) >= 2 else None
+        is_closing_phrase = is_closing_intent_heuristic(user_text)
+        lang_task = identify_language(user_text) if (len(user_text.split()) >= 2 and not is_closing_phrase) else None
 
         if lang_task:
             guard_result, detected_lang = await asyncio.gather(guard_task, lang_task)

@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field
 
 
 class SupportedLanguage(str, Enum):
-    GUJARATI = "Gujarati"
     HINDI = "Hindi"
     ENGLISH = "English"
+    GUJARATI = "Gujarati"
     MARATHI = "Marathi"
     BENGALI = "Bengali"
     TAMIL = "Tamil"
