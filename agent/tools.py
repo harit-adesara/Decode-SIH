@@ -272,9 +272,65 @@ def get_proactive_disease_alerts(
         return f"Error retrieving proactive disease advisory: {str(e)}"
 
 
+def _normalize_location_and_hospital(
+    hospital_name: str = "",
+    state: str = "",
+    district: str = "",
+    city: str = "",
+):
+    """Normalize state, district, city, and hospital names for resilient public health queries."""
+    raw_hosp = (hospital_name or "").strip()
+    raw_state = (state or "").strip()
+    raw_district = (district or "").strip()
+    raw_city = (city or "").strip()
+
+    # Extract hospital name if placed into city, district, or state
+    for field in [raw_city, raw_district, raw_state]:
+        if any(h in field.lower() for h in ["kem", "sassoon", "civil", "hospital", "aspatal", "rugnalay"]):
+            if not raw_hosp:
+                raw_hosp = field
+
+    loc_combined = f"{raw_city} {raw_district} {raw_state} {raw_hosp}".lower()
+
+    clean_state = raw_state
+    clean_district = raw_district
+    clean_city = raw_city
+
+    # Regional normalization & typo handling for Indian cities/districts
+    if any(k in loc_combined for k in ["mumbai", "sububen", "suburban", "bombay", "parel", "andheri", "bandra", "dadar", "kurla", "borivali", "thane", "goregaon", "malad", "juhu"]):
+        clean_state = "Maharashtra"
+        if not clean_district or any(k in loc_combined for k in ["mumbai", "sububen", "suburban", "andheri", "parel", "bandra"]):
+            clean_district = "Mumbai Suburban"
+    elif any(k in loc_combined for k in ["pune", "shivajinagar", "hadapsar", "kothrud", "wakad", "hinjawadi", "pcmc", "pimpri"]):
+        clean_state = "Maharashtra"
+        clean_district = "Pune"
+    elif any(k in loc_combined for k in ["ahmedabad", "satellite", "maninagar", "vastrapur", "navrangpura", "bopal"]):
+        clean_state = "Gujarat"
+        clean_district = "Ahmedabad"
+    elif any(k in loc_combined for k in ["surat"]):
+        clean_state = "Gujarat"
+        clean_district = "Surat"
+    elif any(k in loc_combined for k in ["vadodara", "baroda"]):
+        clean_state = "Gujarat"
+        clean_district = "Vadodara"
+    elif any(k in loc_combined for k in ["rajkot"]):
+        clean_state = "Gujarat"
+        clean_district = "Rajkot"
+    elif any(k in loc_combined for k in ["delhi", "new delhi", "ncr"]):
+        clean_state = "Delhi"
+    elif any(k in loc_combined for k in ["bengaluru", "bangalore"]):
+        clean_state = "Karnataka"
+        clean_district = "Bengaluru Urban"
+
+    if not clean_state:
+        clean_state = "Maharashtra"
+
+    return raw_hosp, clean_state, clean_district, clean_city
+
+
 @tool
 def get_active_viral_diseases(
-    state: str,
+    state: str = "Maharashtra",
     district: str = "",
     city: str = "",
 ) -> str:
@@ -291,16 +347,23 @@ def get_active_viral_diseases(
     - district: District name (e.g. 'Pune', 'Mumbai Suburban', 'Surat') (optional)
     - city: City or Village (e.g. 'Shivajinagar', 'Hadapsar', 'Andheri') (optional)
     """
-    clean_state = state.strip()
+    _, clean_state, clean_district, clean_city = _normalize_location_and_hospital(
+        state=state, district=district, city=city
+    )
+
     url = f"{PUBLIC_HEALTH_API_BASE_URL.rstrip('/')}/api/v1/public/viral-diseases"
     params = {"state": clean_state}
-    if district and district.strip():
-        params["district"] = district.strip()
-    if city and city.strip():
-        params["city"] = city.strip()
+    if clean_district:
+        params["district"] = clean_district
+    if clean_city and clean_city.lower() not in ["all", "general"]:
+        params["city"] = clean_city
 
     try:
-        response = requests.get(url, params=params, timeout=30)
+        response = requests.get(url, params=params, timeout=15)
+        outbreaks = []
+        filter_info = {}
+        count = 0
+
         if response.status_code == 200:
             payload = response.json()
             data_body = payload.get("data", {})
@@ -308,60 +371,65 @@ def get_active_viral_diseases(
             count = data_body.get("count", len(outbreaks))
             filter_info = data_body.get("filter", {})
 
-            if not outbreaks:
-                loc_str = clean_state
-                if district:
-                    loc_str = f"{district}, {loc_str}"
-                if city:
-                    loc_str = f"{city}, {loc_str}"
-                return wrap_untrusted(
-                    "ACTIVE VIRAL DISEASE OUTBREAKS",
-                    f"No active viral disease outbreaks currently recorded for {loc_str}."
-                )
+        # If 0 outbreaks for specific district/city, fallback to state-level outbreaks
+        if not outbreaks:
+            logger.info("No specific viral outbreaks for %s, %s. Querying state level (%s).", clean_district, clean_city, clean_state)
+            state_resp = requests.get(url, params={"state": clean_state}, timeout=15)
+            if state_resp.status_code == 200:
+                s_payload = state_resp.json()
+                s_data_body = s_payload.get("data", {})
+                outbreaks = s_data_body.get("data", [])
+                count = s_data_body.get("count", len(outbreaks))
+                filter_info = s_data_body.get("filter", {})
 
-            formatted_outbreaks = []
-            for idx, item in enumerate(outbreaks, 1):
-                affected_cities = ", ".join(item.get("affectedCities", [])) or "District-wide"
-                symptoms = ", ".join(item.get("symptoms", [])) or "N/A"
-                danger_signs = "; ".join(item.get("dangerSigns", [])) or "None specified"
-                precautions = "; ".join(item.get("recommendedPrecautions", [])) or "Standard infection control"
-                doctor_remarks = " | ".join(item.get("doctorRemarks", [])) or "N/A"
-                clinical_protocol = item.get("clinicalProtocol", "Standard supportive care.")
+        # If still no outbreaks, fetch all active outbreaks in the country
+        if not outbreaks:
+            all_resp = requests.get(url, timeout=15)
+            if all_resp.status_code == 200:
+                a_payload = all_resp.json()
+                a_data_body = a_payload.get("data", {})
+                outbreaks = a_data_body.get("data", [])
+                count = a_data_body.get("count", len(outbreaks))
+                filter_info = a_data_body.get("filter", {})
 
-                outbreak_text = (
-                    f"Outbreak #{idx}: {item.get('diseaseName', 'Viral Outbreak')} (Severity: {item.get('highestSeverity', 'unknown').upper()})\n"
-                    f"- Location: District: {item.get('district', 'All')}, State: {item.get('state', clean_state)} (Affected: {affected_cities})\n"
-                    f"- Cases: {item.get('totalCases', 0)} total reported cases ({item.get('activeReportsCount', 0)} active hospital clusters)\n"
-                    f"- Transmission & Incubation: {item.get('transmissionType', 'N/A')} | Incubation: {item.get('incubationPeriod', 'N/A')}\n"
-                    f"- Symptoms: {symptoms}\n"
-                    f"- DANGER SIGNS: {danger_signs}\n"
-                    f"- Recommended Precautions: {precautions}\n"
-                    f"- Doctor Remarks: {doctor_remarks}\n"
-                    f"- Clinical Protocol: {clinical_protocol}"
-                )
-                formatted_outbreaks.append(outbreak_text)
-
-            filter_desc = f"{filter_info.get('district', district or 'All')}, {filter_info.get('state', clean_state)}"
-            header = f"Active Viral Disease Outbreaks for {filter_desc} (Total Outbreaks: {count}):\n\n"
-            return wrap_untrusted("ACTIVE VIRAL DISEASE OUTBREAKS", header + "\n\n".join(formatted_outbreaks))
-
-        else:
-            logger.info("Public health API endpoint status %s, providing standard clinical telemetry for %s", response.status_code, clean_state)
+        if not outbreaks:
+            loc_str = f"{clean_district}, {clean_state}" if clean_district else clean_state
             return wrap_untrusted(
-                "ACTIVE VIRAL DISEASE OUTBREAKS (REGIONAL CLINICAL ADVISORY)",
-                f"Active clinical telemetry and disease advisory for {clean_state} (District: {district or 'All'}):\n"
-                f"- Monitored Pathogens: Seasonal Influenza (H3N2), Dengue (DENV), Chikungunya, Viral Gastroenteritis.\n"
-                f"- Clinical Trends: Elevated cases of seasonal viral fever and vector-borne complaints in urban clusters.\n"
-                f"- Key Danger Signs: Persistent high fever >3 days, breathing difficulty, mucosal bleeding, severe vomiting/dehydration.\n"
-                f"- Clinical Protocol: Adequate hydration with ORS/fluids, antipyretics (avoid Aspirin/NSAIDs in suspected dengue), prompt hospital consultation.\n"
-                f"- Hospital Action: CBC with platelet count monitoring if fever persists beyond 48 hours."
+                "ACTIVE VIRAL DISEASE OUTBREAKS",
+                f"No active viral disease outbreaks currently recorded for {loc_str}. Standard seasonal infection control precautions apply."
             )
+
+        formatted_outbreaks = []
+        for idx, item in enumerate(outbreaks, 1):
+            affected_cities = ", ".join(item.get("affectedCities", [])) or "District-wide"
+            symptoms = ", ".join(item.get("symptoms", [])) or "N/A"
+            danger_signs = "; ".join(item.get("dangerSigns", [])) or "None specified"
+            precautions = "; ".join(item.get("recommendedPrecautions", [])) or "Standard infection control"
+            doctor_remarks = " | ".join(item.get("doctorRemarks", [])) or "N/A"
+            clinical_protocol = item.get("clinicalProtocol", "Standard supportive care.")
+
+            outbreak_text = (
+                f"Outbreak #{idx}: {item.get('diseaseName', 'Viral Outbreak')} (Severity: {item.get('highestSeverity', 'unknown').upper()})\n"
+                f"- Location: District: {item.get('district', 'All')}, State: {item.get('state', clean_state)} (Affected: {affected_cities})\n"
+                f"- Cases: {item.get('totalCases', 0)} total reported cases ({item.get('activeReportsCount', 0)} active hospital clusters)\n"
+                f"- Transmission & Incubation: {item.get('transmissionType', 'N/A')} | Incubation: {item.get('incubationPeriod', 'N/A')}\n"
+                f"- Symptoms: {symptoms}\n"
+                f"- DANGER SIGNS: {danger_signs}\n"
+                f"- Recommended Precautions: {precautions}\n"
+                f"- Doctor Remarks: {doctor_remarks}\n"
+                f"- Clinical Protocol: {clinical_protocol}"
+            )
+            formatted_outbreaks.append(outbreak_text)
+
+        filter_desc = f"{filter_info.get('district', clean_district or 'All')}, {filter_info.get('state', clean_state)}"
+        header = f"Active Viral Disease Outbreaks for {filter_desc} (Total Outbreaks: {count}):\n\n"
+        return wrap_untrusted("ACTIVE VIRAL DISEASE OUTBREAKS", header + "\n\n".join(formatted_outbreaks))
 
     except requests.exceptions.RequestException as req_err:
         logger.info("Live viral diseases API unreachable (%s), providing standard clinical telemetry for %s", req_err, clean_state)
         return wrap_untrusted(
             "ACTIVE VIRAL DISEASE OUTBREAKS (REGIONAL CLINICAL ADVISORY)",
-            f"Active clinical telemetry and disease advisory for {clean_state} (District: {district or 'All'}):\n"
+            f"Active clinical telemetry and disease advisory for {clean_state} (District: {clean_district or 'All'}):\n"
             f"- Monitored Pathogens: Seasonal Influenza (H3N2), Dengue (DENV), Chikungunya, Viral Gastroenteritis.\n"
             f"- Clinical Trends: Elevated cases of seasonal viral fever and vector-borne complaints in urban clusters.\n"
             f"- Key Danger Signs: Persistent high fever >3 days, breathing difficulty, mucosal bleeding, severe vomiting/dehydration.\n"
@@ -373,9 +441,9 @@ def get_active_viral_diseases(
         return f"Error retrieving active viral disease data: {str(e)}"
 
 
-def _fallback_tavily_hospital_search(state: str, district: str = "", city: str = "") -> str:
+def _fallback_tavily_hospital_search(state: str, district: str = "", city: str = "", hospital_name: str = "") -> str:
     """Fallback to Tavily search when public hospital beds API returns no data or fails."""
-    loc_parts = [p for p in [city, district, state] if p and p.strip()]
+    loc_parts = [p for p in [hospital_name, city, district, state] if p and p.strip()]
     loc_str = ", ".join(loc_parts) if loc_parts else (state or "India")
     query = f"hospitals bed availability ICU ward capacity emergency contact details {loc_str} India"
     try:
@@ -409,127 +477,182 @@ def _fallback_tavily_hospital_search(state: str, district: str = "", city: str =
 
 @tool
 def get_hospital_details(
-    state: str,
+    hospital_name: str = "",
+    state: str = "",
     district: str = "",
     city: str = "",
 ) -> str:
     """
     Retrieve hospital details, bed capacity, vacant vs occupied counts, ICU units, and daily per-bed charges across India.
-    Also provides hospital description, ward types (General, ICU, NICU, Semi-Private, Emergency, Isolation), amenities, and government scheme coverage (e.g. Ayushman Bharat PM-JAY / MJPJAY).
-    If no live telemetry is found, automatically falls back to verified web search.
+    Provides live real-time bed telemetry, ward breakdowns (General Ward, ICCU/ICU, Maternity, Burns, Emergency), amenities, pricing, address, phone number, and Ayushman Bharat PM-JAY empanelment.
 
     Use this tool when the caller asks about:
-    - Hospital bed capacity, vacant beds, or occupied beds in a state, district, or city (e.g. Maharashtra, Pune, Shivajinagar)
-    - ICU beds, ventilator availability, NICU, emergency casualty beds, or isolation wards
-    - Hospital description, address, contact phone number, and daily per-bed charges / pricing
-    - Scheme coverage notes like Ayushman Bharat (PM-JAY) and MJPJAY in hospitals
+    - Hospital bed vacancy, total bed capacity, or occupied beds in a specific hospital (e.g. 'KEM Hospital', 'Sassoon Hospital', 'Civil Hospital')
+    - Vacant beds in a city, district, or state (e.g. Mumbai Suburban, Pune, Ahmedabad, Maharashtra, Gujarat)
+    - ICU beds, ICCU units, ventilator availability, NICU, emergency casualty beds, or isolation wards
+    - Hospital address, emergency contact phone number, and daily per-bed charges / ward pricing (e.g. Rs. 500/day for General Ward, Rs. 6000/day for ICCU)
+    - Government scheme coverage notes like Ayushman Bharat (PM-JAY) and MJPJAY in hospitals
 
     Parameters:
-    - state: Indian State (e.g. 'Maharashtra', 'Gujarat', 'Delhi', 'Rajasthan')
-    - district: District name (e.g. 'Pune', 'Ahmedabad', 'Surat', 'Mumbai') (optional)
-    - city: City or Taluk / locality name (e.g. 'Shivajinagar', 'Hadapsar') (optional)
+    - hospital_name: Hospital name or search keyword (e.g. 'KEM', 'KEM Hospital', 'Sassoon', 'Civil Hospital') (recommended when asking for a specific hospital)
+    - state: Indian State (e.g. 'Maharashtra', 'Gujarat', 'Delhi', 'Rajasthan') (optional)
+    - district: District name (e.g. 'Mumbai Suburban', 'Pune', 'Ahmedabad', 'Surat') (optional)
+    - city: City or locality name (e.g. 'Andheri', 'Shivajinagar', 'Satellite', 'Parel') (optional)
     """
-    clean_state = (state or "").strip()
-    clean_district = (district or "").strip()
-    clean_city = (city or "").strip()
-
-    if not clean_state:
-        clean_state = clean_district or clean_city or "Maharashtra"
+    raw_hosp, clean_state, clean_district, clean_city = _normalize_location_and_hospital(
+        hospital_name=hospital_name, state=state, district=district, city=city
+    )
 
     url = f"{PUBLIC_HEALTH_API_BASE_URL.rstrip('/')}/api/v1/public/hospital-beds"
-    params = {"state": clean_state}
-    if clean_district:
-        params["district"] = clean_district
-    if clean_city:
-        params["city"] = clean_city
+    hospitals = []
+    summary = {}
 
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        if response.status_code == 200:
-            payload = response.json()
-            data_body = payload.get("data", {})
-            hospitals = data_body.get("hospitals", [])
-            summary = data_body.get("summary", {})
+    # Tier 1: Search by hospital name keyword if provided
+    if raw_hosp:
+        clean_search = (
+            raw_hosp.lower()
+            .replace("hospital", "")
+            .replace("memorial", "")
+            .replace("super", "")
+            .replace("speciality", "")
+            .strip()
+            or raw_hosp
+        )
+        try:
+            r = requests.get(url, params={"search": clean_search}, timeout=15)
+            if r.status_code == 200:
+                payload = r.json()
+                data_body = payload.get("data", {})
+                hospitals = data_body.get("hospitals", [])
+                summary = data_body.get("summary", {})
+        except Exception as e:
+            logger.info("Search query for hospital failed: %s", e)
 
-            # If no hospitals returned from the live API, fallback to Tavily search
-            if not hospitals:
-                logger.info(
-                    "Hospital API returned 0 hospitals for %s, %s, %s. Using Tavily fallback.",
-                    clean_city, clean_district, clean_state
+    # Tier 2: Search by normalized state and district
+    if not hospitals:
+        params = {"state": clean_state}
+        if clean_district:
+            params["district"] = clean_district
+        if clean_city and clean_city.lower() not in ["parel", "kem", "all", "general"]:
+            params["city"] = clean_city
+
+        try:
+            r = requests.get(url, params=params, timeout=15)
+            if r.status_code == 200:
+                payload = r.json()
+                data_body = payload.get("data", {})
+                hospitals = data_body.get("hospitals", [])
+                summary = data_body.get("summary", {})
+        except Exception as e:
+            logger.info("State/district query failed: %s", e)
+
+    # Tier 3: Fetch all telemetry and perform in-memory fuzzy/substring matching
+    if not hospitals:
+        try:
+            r = requests.get(url, timeout=15)
+            if r.status_code == 200:
+                payload = r.json()
+                data_body = payload.get("data", {})
+                all_hosps = data_body.get("hospitals", [])
+                summary = data_body.get("summary", {})
+
+                # Filter in-memory by hospital name, district, city, address, or state
+                for hosp in all_hosps:
+                    h_name = hosp.get("hospitalName", "").lower()
+                    h_dist = hosp.get("district", "").lower()
+                    h_city = hosp.get("city", "").lower()
+                    h_addr = hosp.get("address", "").lower()
+                    h_state = hosp.get("state", "").lower()
+
+                    matched = False
+                    if raw_hosp:
+                        tokens = [t.lower() for t in raw_hosp.split() if len(t) > 2 and t.lower() not in ["hospital", "the", "and"]]
+                        if any(tok in h_name or tok in h_addr for tok in tokens):
+                            matched = True
+                    elif clean_district:
+                        dist_tokens = [t.lower() for t in clean_district.split() if len(t) > 2]
+                        if any(tok in h_dist or tok in h_addr or tok in h_name for tok in dist_tokens):
+                            matched = True
+                    elif clean_city:
+                        if clean_city.lower() in h_city or clean_city.lower() in h_addr:
+                            matched = True
+                    elif clean_state:
+                        if clean_state.lower() == h_state:
+                            matched = True
+
+                    if matched and hosp not in hospitals:
+                        hospitals.append(hosp)
+
+        except Exception as e:
+            logger.info("All hospitals fallback query failed: %s", e)
+
+    # If still no hospitals found in live API, fallback to Tavily search
+    if not hospitals:
+        logger.info(
+            "Live hospital beds API returned 0 results for hosp='%s', city='%s', dist='%s', state='%s'. Falling back to Tavily.",
+            raw_hosp, clean_city, clean_district, clean_state
+        )
+        return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city, raw_hosp)
+
+    loc_desc = f"{clean_district or 'All Districts'}, {clean_state}"
+    if raw_hosp:
+        loc_desc = f"{raw_hosp} ({loc_desc})"
+
+    lines = []
+    if summary and not raw_hosp:
+        total_hosp = summary.get("totalHospitals", len(hospitals))
+        total_beds = summary.get("totalBeds", 0)
+        vacant_beds = summary.get("totalVacantBeds", 0)
+        occupied_beds = summary.get("totalOccupiedBeds", 0)
+        occ_rate = summary.get("occupancyRate", 0)
+        icu_total = summary.get("icuTotalBeds", 0)
+        icu_vacant = summary.get("icuVacantBeds", 0)
+        lines.append(
+            f"Hospital Bed Telemetry Summary for {loc_desc}:\n"
+            f"- Total Hospitals: {total_hosp} | Total Wards: {summary.get('totalWards', 0)}\n"
+            f"- Overall Beds: {total_beds} Total ({vacant_beds} Vacant, {occupied_beds} Occupied, {occ_rate}% Occupancy)\n"
+            f"- ICU Units: {icu_total} Total ICU Beds ({icu_vacant} Vacant ICU Beds)"
+        )
+
+    for idx, hosp in enumerate(hospitals, 1):
+        h_name = hosp.get("hospitalName", "Hospital")
+        h_addr = hosp.get("address", "N/A")
+        h_phone = hosp.get("phone", "N/A")
+        h_total = hosp.get("totalBeds", 0)
+        h_vacant = hosp.get("vacantBeds", 0)
+        h_occupied = hosp.get("occupiedBeds", 0)
+        h_occ = hosp.get("occupancyRate", 0)
+        min_p = hosp.get("minPrice", 0)
+        max_p = hosp.get("maxPrice", 0)
+
+        hosp_text = [
+            f"Hospital #{idx}: {h_name}",
+            f"- Location: {hosp.get('city', clean_city or 'N/A')}, {hosp.get('district', clean_district or 'N/A')}, {hosp.get('state', clean_state)}",
+            f"- Address: {h_addr}",
+            f"- Phone: {h_phone}",
+            f"- Live Bed Capacity: {h_vacant} Vacant / {h_total} Total Beds ({h_occupied} Occupied, {h_occ}% Occupancy)",
+            f"- Daily Charges Range: Rs. {min_p} to Rs. {max_p} per day",
+        ]
+
+        wards = hosp.get("wards", [])
+        if wards:
+            hosp_text.append("- Wards Breakdown & Live Vacancy:")
+            for w in wards:
+                w_name = w.get("displayName") or w.get("wardType", "Ward")
+                w_vac = w.get("vacantBeds", 0)
+                w_tot = w.get("totalBeds", 0)
+                w_occ = w.get("occupiedBeds", 0)
+                w_price = w.get("pricePerDay", 0)
+                w_amenities = ", ".join(w.get("amenities", [])) or "Standard Amenities"
+                w_notes = w.get("notes", "")
+                notes_suffix = f" [Note: {w_notes}]" if w_notes else ""
+                hosp_text.append(
+                    f"  - {w_name}: {w_vac}/{w_tot} Vacant Beds ({w_occ} Occupied) | Rs. {w_price}/day | Amenities: {w_amenities}{notes_suffix}"
                 )
-                return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city)
 
-            loc_info = summary.get("location", {})
-            filter_desc = f"{loc_info.get('district', clean_district or 'All')}, {loc_info.get('state', clean_state)}"
-            if clean_city:
-                filter_desc = f"{clean_city}, {filter_desc}"
+        lines.append("\n".join(hosp_text))
 
-            lines = []
-            if summary:
-                total_hosp = summary.get("totalHospitals", len(hospitals))
-                total_beds = summary.get("totalBeds", 0)
-                vacant_beds = summary.get("totalVacantBeds", 0)
-                occupied_beds = summary.get("totalOccupiedBeds", 0)
-                occ_rate = summary.get("occupancyRate", 0)
-                icu_total = summary.get("icuTotalBeds", 0)
-                icu_vacant = summary.get("icuVacantBeds", 0)
-                lines.append(
-                    f"Hospital Bed Telemetry Summary for {filter_desc}:\n"
-                    f"- Total Hospitals: {total_hosp} | Total Wards: {summary.get('totalWards', 0)}\n"
-                    f"- Overall Beds: {total_beds} Total ({vacant_beds} Vacant, {occupied_beds} Occupied, {occ_rate}% Occupancy)\n"
-                    f"- ICU Units: {icu_total} Total ICU Beds ({icu_vacant} Vacant ICU Beds)"
-                )
-
-            for idx, hosp in enumerate(hospitals, 1):
-                h_name = hosp.get("hospitalName", "Hospital")
-                h_addr = hosp.get("address", "N/A")
-                h_phone = hosp.get("phone", "N/A")
-                h_total = hosp.get("totalBeds", 0)
-                h_vacant = hosp.get("vacantBeds", 0)
-                h_occupied = hosp.get("occupiedBeds", 0)
-                h_occ = hosp.get("occupancyRate", 0)
-                min_p = hosp.get("minPrice", 0)
-                max_p = hosp.get("maxPrice", 0)
-
-                hosp_text = [
-                    f"Hospital #{idx}: {h_name}",
-                    f"- Location: {hosp.get('city', clean_city or 'N/A')}, {hosp.get('district', clean_district or 'N/A')}, {hosp.get('state', clean_state)}",
-                    f"- Address: {h_addr}",
-                    f"- Phone: {h_phone}",
-                    f"- Bed Capacity: {h_vacant} Vacant / {h_total} Total Beds ({h_occupied} Occupied, {h_occ}% Occupancy)",
-                    f"- Daily Charges: Rs. {min_p} - Rs. {max_p} per day",
-                ]
-
-                wards = hosp.get("wards", [])
-                if wards:
-                    hosp_text.append("- Wards & Capacity:")
-                    for w in wards:
-                        w_name = w.get("displayName") or w.get("wardType", "Ward")
-                        w_vac = w.get("vacantBeds", 0)
-                        w_tot = w.get("totalBeds", 0)
-                        w_occ = w.get("occupiedBeds", 0)
-                        w_price = w.get("pricePerDay", 0)
-                        w_amenities = ", ".join(w.get("amenities", [])) or "Standard Amenities"
-                        w_notes = w.get("notes", "")
-                        notes_suffix = f" [Note: {w_notes}]" if w_notes else ""
-                        hosp_text.append(
-                            f"  - {w_name}: {w_vac}/{w_tot} Vacant Beds (Occupied: {w_occ}) | Rs. {w_price}/day | Amenities: {w_amenities}{notes_suffix}"
-                        )
-
-                lines.append("\n".join(hosp_text))
-
-            return wrap_untrusted("HOSPITAL BED AVAILABILITY & DETAILS", "\n\n".join(lines))
-
-        else:
-            logger.info("Hospital API returned status %s. Using Tavily fallback.", response.status_code)
-            return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city)
-
-    except requests.exceptions.RequestException as req_err:
-        logger.info("Hospital API unreachable (%s). Using Tavily fallback.", req_err)
-        return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city)
-    except Exception as e:
-        logger.error("Failed to retrieve hospital details: %s", e)
-        return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city)
+    return wrap_untrusted("HOSPITAL BED AVAILABILITY & DETAILS", "\n\n".join(lines))
 
 
 
