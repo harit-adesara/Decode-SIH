@@ -373,6 +373,168 @@ def get_active_viral_diseases(
         return f"Error retrieving active viral disease data: {str(e)}"
 
 
+def _fallback_tavily_hospital_search(state: str, district: str = "", city: str = "") -> str:
+    """Fallback to Tavily search when public hospital beds API returns no data or fails."""
+    loc_parts = [p for p in [city, district, state] if p and p.strip()]
+    loc_str = ", ".join(loc_parts) if loc_parts else (state or "India")
+    query = f"hospitals bed availability ICU ward capacity emergency contact details {loc_str} India"
+    try:
+        response = tavily_client.search(
+            query=query,
+            search_depth="basic",
+            max_results=4,
+            include_answer=True,
+        )
+        results = []
+        if response.get("answer"):
+            results.append(f"Summary: {response['answer']}")
+
+        for item in response.get("results", []):
+            title = item.get("title", "Hospital / Medical Center")
+            content = item.get("content", "")[:350]
+            url = item.get("url", "")
+            results.append(f"Hospital / Facility: {title}\nDetails: {content}\nSource: {url}")
+
+        if results:
+            return wrap_untrusted("HOSPITAL BED AVAILABILITY & DETAILS (WEB SEARCH FALLBACK)", "\n\n".join(results))
+
+    except Exception as err:
+        logger.warning("Tavily fallback search failed for hospital details: %s", err)
+
+    return wrap_untrusted(
+        "HOSPITAL BED AVAILABILITY & DETAILS",
+        f"No real-time hospital bed telemetry is currently available for {loc_str}. For emergency bed assistance, please contact the 108 Emergency Helpline or visit the nearest government hospital / Primary Health Center (PHC)."
+    )
+
+
+@tool
+def get_hospital_details(
+    state: str,
+    district: str = "",
+    city: str = "",
+) -> str:
+    """
+    Retrieve hospital details, bed capacity, vacant vs occupied counts, ICU units, and daily per-bed charges across India.
+    Also provides hospital description, ward types (General, ICU, NICU, Semi-Private, Emergency, Isolation), amenities, and government scheme coverage (e.g. Ayushman Bharat PM-JAY / MJPJAY).
+    If no live telemetry is found, automatically falls back to verified web search.
+
+    Use this tool when the caller asks about:
+    - Hospital bed capacity, vacant beds, or occupied beds in a state, district, or city (e.g. Maharashtra, Pune, Shivajinagar)
+    - ICU beds, ventilator availability, NICU, emergency casualty beds, or isolation wards
+    - Hospital description, address, contact phone number, and daily per-bed charges / pricing
+    - Scheme coverage notes like Ayushman Bharat (PM-JAY) and MJPJAY in hospitals
+
+    Parameters:
+    - state: Indian State (e.g. 'Maharashtra', 'Gujarat', 'Delhi', 'Rajasthan')
+    - district: District name (e.g. 'Pune', 'Ahmedabad', 'Surat', 'Mumbai') (optional)
+    - city: City or Taluk / locality name (e.g. 'Shivajinagar', 'Hadapsar') (optional)
+    """
+    clean_state = (state or "").strip()
+    clean_district = (district or "").strip()
+    clean_city = (city or "").strip()
+
+    if not clean_state:
+        clean_state = clean_district or clean_city or "Maharashtra"
+
+    url = f"{PUBLIC_HEALTH_API_BASE_URL.rstrip('/')}/api/v1/public/hospital-beds"
+    params = {"state": clean_state}
+    if clean_district:
+        params["district"] = clean_district
+    if clean_city:
+        params["city"] = clean_city
+
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        if response.status_code == 200:
+            payload = response.json()
+            data_body = payload.get("data", {})
+            hospitals = data_body.get("hospitals", [])
+            summary = data_body.get("summary", {})
+
+            # If no hospitals returned from the live API, fallback to Tavily search
+            if not hospitals:
+                logger.info(
+                    "Hospital API returned 0 hospitals for %s, %s, %s. Using Tavily fallback.",
+                    clean_city, clean_district, clean_state
+                )
+                return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city)
+
+            loc_info = summary.get("location", {})
+            filter_desc = f"{loc_info.get('district', clean_district or 'All')}, {loc_info.get('state', clean_state)}"
+            if clean_city:
+                filter_desc = f"{clean_city}, {filter_desc}"
+
+            lines = []
+            if summary:
+                total_hosp = summary.get("totalHospitals", len(hospitals))
+                total_beds = summary.get("totalBeds", 0)
+                vacant_beds = summary.get("totalVacantBeds", 0)
+                occupied_beds = summary.get("totalOccupiedBeds", 0)
+                occ_rate = summary.get("occupancyRate", 0)
+                icu_total = summary.get("icuTotalBeds", 0)
+                icu_vacant = summary.get("icuVacantBeds", 0)
+                lines.append(
+                    f"Hospital Bed Telemetry Summary for {filter_desc}:\n"
+                    f"- Total Hospitals: {total_hosp} | Total Wards: {summary.get('totalWards', 0)}\n"
+                    f"- Overall Beds: {total_beds} Total ({vacant_beds} Vacant, {occupied_beds} Occupied, {occ_rate}% Occupancy)\n"
+                    f"- ICU Units: {icu_total} Total ICU Beds ({icu_vacant} Vacant ICU Beds)"
+                )
+
+            for idx, hosp in enumerate(hospitals, 1):
+                h_name = hosp.get("hospitalName", "Hospital")
+                h_addr = hosp.get("address", "N/A")
+                h_phone = hosp.get("phone", "N/A")
+                h_total = hosp.get("totalBeds", 0)
+                h_vacant = hosp.get("vacantBeds", 0)
+                h_occupied = hosp.get("occupiedBeds", 0)
+                h_occ = hosp.get("occupancyRate", 0)
+                min_p = hosp.get("minPrice", 0)
+                max_p = hosp.get("maxPrice", 0)
+
+                hosp_text = [
+                    f"Hospital #{idx}: {h_name}",
+                    f"- Location: {hosp.get('city', clean_city or 'N/A')}, {hosp.get('district', clean_district or 'N/A')}, {hosp.get('state', clean_state)}",
+                    f"- Address: {h_addr}",
+                    f"- Phone: {h_phone}",
+                    f"- Bed Capacity: {h_vacant} Vacant / {h_total} Total Beds ({h_occupied} Occupied, {h_occ}% Occupancy)",
+                    f"- Daily Charges: Rs. {min_p} - Rs. {max_p} per day",
+                ]
+
+                wards = hosp.get("wards", [])
+                if wards:
+                    hosp_text.append("- Wards & Capacity:")
+                    for w in wards:
+                        w_name = w.get("displayName") or w.get("wardType", "Ward")
+                        w_vac = w.get("vacantBeds", 0)
+                        w_tot = w.get("totalBeds", 0)
+                        w_occ = w.get("occupiedBeds", 0)
+                        w_price = w.get("pricePerDay", 0)
+                        w_amenities = ", ".join(w.get("amenities", [])) or "Standard Amenities"
+                        w_notes = w.get("notes", "")
+                        notes_suffix = f" [Note: {w_notes}]" if w_notes else ""
+                        hosp_text.append(
+                            f"  - {w_name}: {w_vac}/{w_tot} Vacant Beds (Occupied: {w_occ}) | Rs. {w_price}/day | Amenities: {w_amenities}{notes_suffix}"
+                        )
+
+                lines.append("\n".join(hosp_text))
+
+            return wrap_untrusted("HOSPITAL BED AVAILABILITY & DETAILS", "\n\n".join(lines))
+
+        else:
+            logger.info("Hospital API returned status %s. Using Tavily fallback.", response.status_code)
+            return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city)
+
+    except requests.exceptions.RequestException as req_err:
+        logger.info("Hospital API unreachable (%s). Using Tavily fallback.", req_err)
+        return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city)
+    except Exception as e:
+        logger.error("Failed to retrieve hospital details: %s", e)
+        return _fallback_tavily_hospital_search(clean_state, clean_district, clean_city)
+
+
+
+
+
 @tool
 def classify_epidemic_outbreak_risk(
     state: str,

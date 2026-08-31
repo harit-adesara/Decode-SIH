@@ -13,6 +13,7 @@ from .tools import (
     end_call_tool,
     get_proactive_disease_alerts,
     get_active_viral_diseases,
+    get_hospital_details,
     classify_epidemic_outbreak_risk,
 )
 from .state import Data
@@ -42,6 +43,7 @@ tools = [
     end_call_tool,
     get_proactive_disease_alerts,
     get_active_viral_diseases,
+    get_hospital_details,
     classify_epidemic_outbreak_risk,
 ]
 
@@ -64,7 +66,10 @@ Key Operational Principles:
      1. Inquire empathetically and assess severity/specialty using `symptom_triage_guide`.
      2. PROACTIVELY check active viral outbreaks, local cluster counts, and danger signs for their city/district/state using `get_active_viral_diseases`.
      3. PROACTIVELY check weather-related epidemic vulnerability and seasonal forecasts using `get_proactive_disease_alerts` or `classify_epidemic_outbreak_risk`.
-     4. If they need medical attention, offer to find verified nearby clinics/hospitals using `find_healthcare_facility`.
+     4. If they need hospital bed capacity, ICU availability, or admission pricing, check `get_hospital_details`.
+     5. If they need medical attention or nearby clinics/PHCs, offer to find verified facilities using `find_healthcare_facility`.
+   - If the caller asks about Hospital Bed Availability, Bed Capacity, Vacant Beds, ICU Units, NICU, Ward Pricing, or Hospital Details (e.g. Pune, Maharashtra):
+     -> Use `get_hospital_details`.
    - If the caller asks about Government Health Schemes (PM-JAY, ABHA, eSanjeevani, MA Card, eligibility, coverage):
      -> Use `government_scheme_rag`.
    - If the caller asks for hospitals, PHCs, or clinics in their area (e.g. Maninagar, Ahmedabad, Surat, Pune, Mumbai):
@@ -81,6 +86,7 @@ Key Operational Principles:
 3. DYNAMIC TELEPHONY CONVERSATION (ANY ORDER OF QUERIES):
    Callers may ask about anything in any order:
    - Health Symptoms & Illness -> Proactively combine `symptom_triage_guide` + `get_active_viral_diseases` + `get_proactive_disease_alerts`.
+   - Hospital Beds & ICU Capacity -> `get_hospital_details`.
    - Government Schemes (PM-JAY, ABHA, e-Sanjeevani, MA Card) -> `government_scheme_rag`.
    - Hospital / PHC Search -> `find_healthcare_facility`.
    - Travel Distance & Duration -> `calculate_distance`.
