@@ -35,10 +35,10 @@ SAMPLE_RATE = 8000
 SAMPLE_WIDTH = 2
 CHANNELS = 1
 
-# VAD (Voice Activity Detection) parameters tuned for natural conversational pauses (2-3s)
-VAD_RMS_THRESHOLD = int(os.getenv("VAD_RMS_THRESHOLD", "260"))
-SILENCE_MS = int(os.getenv("VAD_SILENCE_MS", "1800"))
-MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "300"))
+# VAD (Voice Activity Detection) parameters tuned for natural conversational speech and noise rejection
+VAD_RMS_THRESHOLD = int(os.getenv("VAD_RMS_THRESHOLD", "300"))
+SILENCE_MS = int(os.getenv("VAD_SILENCE_MS", "1600"))
+MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "350"))
 MAX_UTTERANCE_MS = int(os.getenv("VAD_MAX_UTTERANCE_MS", "12000"))
 
 # Response timeouts & Inactivity watchdog
@@ -186,17 +186,139 @@ _closing_config = types.GenerateContentConfig(
 )
 
 
+LANGUAGE_SELECT_KEYWORDS = {
+    "Gujarati": [
+        "gujarati", "gujrati", "gujju", "ગુજરાતી", "ગુજરાતિ", "ગુજ્જુ",
+        "gujarati ma", "gujarati mein", "gujarati me", "gujarati bhasha", "gujarati language",
+        "mane gujarati", "gujarati bolo", "gujarati ma bolo", "gujarati chalega", "gujrati ma",
+    ],
+    "Hindi": [
+        "hindi", "हिंदी", "हिन्दी", "hindi mein", "hindi me", "hindi bhasha",
+        "hindi language", "hindustani", "hindi bolo", "shuddh hindi", "hindi chalega",
+    ],
+    "English": [
+        "english", "angrezi", "angreji", "ઇંગ્લિશ", "इंग्लिश", "english please",
+        "speak in english", "english language", "in english", "english chalega",
+    ],
+    "Marathi": [
+        "marathi", "मराठी", "marathi madhe", "marathi bhasha", "marathi language", "marathi chalel",
+    ],
+    "Bengali": [
+        "bengali", "bangla", "বাংলা", "bangla te", "bengali language", "bangla cholbe",
+    ],
+    "Tamil": [
+        "tamil", "தமிழ்", "tamilil", "tamil pesu", "tamil language",
+    ],
+    "Telugu": [
+        "telugu", "తెలుగు", "telugulo", "telugu matladu", "telugu language",
+    ],
+    "Kannada": [
+        "kannada", "ಕನ್ನಡ", "kannadadalli", "kannada mathadi", "kannada language",
+    ],
+    "Malayalam": [
+        "malayalam", "മലയാളം", "malayalam parayu", "malayalam language",
+    ],
+}
+
+LANGUAGE_SWITCH_PATTERNS = [
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:gujarati|gujrati|ગુજરાતી))|(?:(?:gujarati|gujrati|ગુજરાતી)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|bol|bolo|baat|vaat|chalega|please))", re.IGNORECASE), "Gujarati"),
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:hindi|हिंदी|हिन्दी))|(?:(?:hindi|हिंदी|हिन्दी)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|bol|bolo|baat|vaat|chalega|please))", re.IGNORECASE), "Hindi"),
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:english|angrezi|angreji))|(?:(?:english|angrezi|angreji)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|bol|bolo|baat|vaat|chalega|please))", re.IGNORECASE), "English"),
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:marathi|मराठी))|(?:(?:marathi|मराठी)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|bol|bolo|baat|vaat|sang|chalel|please))", re.IGNORECASE), "Marathi"),
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:bengali|bangla|বাংলা))|(?:(?:bengali|bangla|বাংলা)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|bol|bolo|baat|vaat|bolun|cholbe|please))", re.IGNORECASE), "Bengali"),
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:tamil|தமிழ்))|(?:(?:tamil|தமிழ்)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|pesu|pesavum|please))", re.IGNORECASE), "Tamil"),
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:telugu|తెలుగు))|(?:(?:telugu|తెలుగు)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|matladu|matladandi|please))", re.IGNORECASE), "Telugu"),
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:kannada|ಕನ್ನಡ))|(?:(?:kannada|ಕನ್ನಡ)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|mathadi|mathanadi|please))", re.IGNORECASE), "Kannada"),
+    (re.compile(r"(?:(?:speak|talk|switch|change|convert|bol|bolo|vaat|sang|pesu|matladu|mathadi|parayu)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:malayalam|മലയാളം))|(?:(?:malayalam|മലയാളം)\s+(?:in|to|mein|me|ma|madhe|te|il|lo|dalli)?\s*(?:speak|talk|switch|change|parayu|parayuka|please))", re.IGNORECASE), "Malayalam"),
+]
+
+
+def extract_language_keyword(text: str) -> Optional[str]:
+    """Fast deterministic multi-script matching for language names and common choice phrases."""
+    if not text:
+        return None
+    cleaned = re.sub(r"[^\w\s\u0900-\u0DFF]", " ", text.lower()).strip()
+    words = cleaned.split()
+
+    for lang, kws in LANGUAGE_SELECT_KEYWORDS.items():
+        for kw in kws:
+            kw_clean = kw.lower().strip()
+            if " " in kw_clean:
+                if kw_clean in cleaned:
+                    return lang
+            else:
+                if kw_clean in words or kw_clean == cleaned:
+                    return lang
+
+    stems = {
+        "gujarat": "Gujarati",
+        "gujrat": "Gujarati",
+        "ગુજરાત": "Gujarati",
+        "marath": "Marathi",
+        "मराठ": "Marathi",
+        "bengal": "Bengali",
+        "bangla": "Bengali",
+        "বাংল": "Bengali",
+        "tamizh": "Tamil",
+        "tamil": "Tamil",
+        "தமி": "Tamil",
+        "telug": "Telugu",
+        "తెలు": "Telugu",
+        "kannad": "Kannada",
+        "ಕನ್ನ": "Kannada",
+        "malayal": "Malayalam",
+        "മലയാ": "Malayalam",
+        "english": "English",
+        "angrez": "English",
+        "angrej": "English",
+        "hindi": "Hindi",
+        "हिन्द": "Hindi",
+        "हिंद": "Hindi",
+    }
+    for stem, lang in stems.items():
+        if stem in cleaned:
+            return lang
+
+    return None
+
+
+def detect_explicit_language_switch(user_text: str, current_language: str) -> Optional[str]:
+    """Detect if caller is explicitly demanding to switch languages mid-conversation."""
+    if not user_text:
+        return None
+    for pattern, target_lang in LANGUAGE_SWITCH_PATTERNS:
+        if pattern.search(user_text):
+            return target_lang
+    return None
+
+
 async def identify_language(user_text: str) -> str:
-    """Identify caller's spoken language using Gemini LLM with Pydantic classification schema."""
+    """
+    Identify caller's requested language choice using fast keyword matcher with LLM preference extraction fallback.
+    """
     if not user_text or not user_text.strip():
         return "Hindi"
 
+    # 1. Fast deterministic keyword match (0ms latency)
+    matched = extract_language_keyword(user_text)
+    if matched:
+        return matched
+
+    # 2. LLM Preference Extraction
     if _gemini_client:
         prompt = (
-            "You are an Indian language identification specialist for a voice healthcare assistant. "
-            "Identify the primary language spoken in this utterance strictly from the supported list: "
-            "Gujarati, Hindi, English, Marathi, Bengali, Tamil, Telugu, Kannada, Malayalam.\n\n"
-            f"Utterance: \"{user_text}\""
+            "You are an Indian language selection classifier for a voice healthcare assistant.\n"
+            "The caller was asked: 'Which language would you like to speak in? e.g., Hindi, Gujarati, English'.\n"
+            f"Caller Utterance: \"{user_text}\"\n\n"
+            "Determine which language the caller PREFERS or WANTS TO COMMUNICATE IN from the supported list: "
+            "Gujarati, Hindi, English, Marathi, Bengali, Tamil, Telugu, Kannada, Malayalam.\n"
+            "IMPORTANT RULES:\n"
+            "- If the caller asks in Hindi e.g. 'gujarati me baat karo' or 'gujarati chalega', the chosen language is GUJARATI.\n"
+            "- If the caller asks in English e.g. 'can we talk in gujarati', the chosen language is GUJARATI.\n"
+            "- If the caller speaks Gujarati phrasing e.g. 'kem cho mane bukhar che' or 'mane gujarati aavde che', the language is GUJARATI.\n"
+            "- If the caller speaks Hindi phrasing e.g. 'mujhe bukhar hai' or 'hindi me batao', the language is HINDI.\n"
+            "- If the caller speaks English e.g. 'i have fever', the language is ENGLISH.\n"
+            "Select strictly one language from: [Gujarati, Hindi, English, Marathi, Bengali, Tamil, Telugu, Kannada, Malayalam]."
         )
         try:
             try:
@@ -409,14 +531,18 @@ class SpeechBuffer:
 
         if self.speech_ms >= MIN_SPEECH_MS and self.silence_ms >= SILENCE_MS:
             audio = b"".join(self.parts)
-            logger.info("Utterance captured: %d ms (%d bytes)", self.total_ms, len(audio))
+            total_time = self.total_ms
             self.clear_all()
+            if len(audio) < int(SAMPLE_RATE * SAMPLE_WIDTH * (MIN_SPEECH_MS / 1000.0)):
+                return None
+            logger.info("Utterance captured: %d ms (%d bytes)", total_time, len(audio))
             return audio
 
         if self.total_ms >= MAX_UTTERANCE_MS:
             audio = b"".join(self.parts)
-            logger.info("Max utterance reached: %d ms (%d bytes)", self.total_ms, len(audio))
+            total_time = self.total_ms
             self.clear_all()
+            logger.info("Max utterance reached: %d ms (%d bytes)", total_time, len(audio))
             return audio
 
         return None
@@ -605,20 +731,21 @@ async def select_language_turn(
     stream_sid: str,
     audio: bytes,
     encoding: str = "base64",
-) -> tuple[str, str]:
+) -> tuple[Optional[str], Optional[str]]:
     """Transcribe caller's language choice -> acknowledge and greet in that language."""
     try:
         user_text = await asyncio.to_thread(stt, audio, "unknown")
         user_text = (user_text or "").strip()
-        logger.info("Caller language choice: %s", user_text)
+        logger.info("Caller language choice utterance: %s", user_text)
 
         if not user_text:
+            # Audio was silence or noise; prompt user again but DO NOT lock language into Hindi
             await speak(websocket, stream_sid, LANGUAGE_RETRY_TEXT, "hi-IN", encoding=encoding)
-            return "Hindi", "hi-IN"
+            return None, None
 
         language = await identify_language(user_text)
         language_code = get_language_code(language)
-        logger.info("Selected language: %s (%s)", language, language_code)
+        logger.info("Selected language locked: %s (%s)", language, language_code)
 
         intro_text = get_language_intro(language_code)
         await speak(websocket, stream_sid, intro_text, language_code, encoding=encoding)
@@ -626,8 +753,8 @@ async def select_language_turn(
 
     except Exception:
         logger.exception("Language selection turn failed")
-        await speak(websocket, stream_sid, LANGUAGE_INTROS["hi-IN"], "hi-IN", encoding=encoding)
-        return "Hindi", "hi-IN"
+        await speak(websocket, stream_sid, LANGUAGE_RETRY_TEXT, "hi-IN", encoding=encoding)
+        return None, None
 
 
 PROCESSING_FILLER_DELAY_SECONDS = float(os.getenv("PROCESSING_FILLER_DELAY_SECONDS", "5.0"))
@@ -791,22 +918,18 @@ async def conversation_turn(
         logger.info("Caller query [Turn %d]: %s", turn_count, user_text)
 
         if not user_text:
-            await speak(websocket, stream_sid, get_resume_retry_text(language_code), language_code, encoding=encoding)
+            logger.info("Empty STT frame ignored on Turn %d | call_sid=%s", turn_count, call_sid)
             return language, language_code, False
 
-        # Concurrent LLM safety guardrail & dynamic language detection (low-latency parallel execution)
-        guard_task = asyncio.to_thread(check_input, user_text)
-        is_closing_phrase = is_closing_intent_heuristic(user_text)
-        lang_task = identify_language(user_text) if (len(user_text.split()) >= 2 and not is_closing_phrase) else None
+        # Only switch language if caller explicitly requests a language switch
+        explicit_lang = detect_explicit_language_switch(user_text, language)
+        if explicit_lang and explicit_lang != language:
+            language = explicit_lang
+            language_code = get_language_code(language)
+            logger.info("Language switched via explicit caller request: %s (%s)", language, language_code)
 
-        if lang_task:
-            guard_result, detected_lang = await asyncio.gather(guard_task, lang_task)
-            if detected_lang and detected_lang != language:
-                language = detected_lang
-                language_code = get_language_code(language)
-                logger.info("Language dynamically updated via LLM: %s (%s)", language, language_code)
-        else:
-            guard_result = await guard_task
+        # Run input safety guardrail
+        guard_result = await asyncio.to_thread(check_input, user_text)
 
         if guard_result.get("unsafe"):
             logger.warning("Caller input flagged by LLM safety guardrail: %s", guard_result.get("reason"))
@@ -821,7 +944,12 @@ async def conversation_turn(
         }
 
         turn_input = {
-            "messages": [{"role": "user", "content": user_text}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"[Active Caller Language: {language} ({language_code})]\n{user_text}",
+                }
+            ],
             "call_sid": call_sid,
             "phone_number": phone_number,
             "language": language,
@@ -1234,12 +1362,15 @@ async def exotel_media(websocket: WebSocket):
                 try:
                     if language_code is None:
                         # Turn 0: Identify language and greet in chosen language
-                        language, language_code = await select_language_turn(
+                        new_lang, new_code = await select_language_turn(
                             websocket,
                             stream_sid,
                             utterance,
                             encoding=encoding,
                         )
+                        if new_code is not None:
+                            language = new_lang
+                            language_code = new_code
                     else:
                         # Turn 1+: Direct healthcare consultation
                         turn_count += 1
